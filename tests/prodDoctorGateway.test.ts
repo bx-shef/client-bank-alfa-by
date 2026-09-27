@@ -173,9 +173,12 @@ describe('шлюза нет или он остановлен — вердикт 
     expect(out).not.toContain('[otel]')
   })
 
-  it('задан только один адрес — предупреждение о половинчатой настройке', () => {
-    const { out } = doctor({ FAKE_API: DIRECT, FAKE_TOKEN: '' })
-    expect(out).toContain('Приорбанк настроен наполовину (API_BASE — напрямую api.priorbank.by:9344, TOKEN_URL — не задан)')
+  it.each([
+    [DIRECT, '', 'API_BASE — напрямую api.priorbank.by:9344, TOKEN_URL — не задан'],
+    ['', DIRECT_TOKEN, 'API_BASE — не задан, TOKEN_URL — напрямую api.priorbank.by:9344']
+  ])('задан только один адрес (%s | %s) — авария: без второго Приорбанк встанет', (api, token, routes) => {
+    const { out } = doctor({ FAKE_API: api, FAKE_TOKEN: token })
+    expect(out).toMatch(new RegExp(`ПЛОХО.*Приорбанк настроен наполовину \\(${routes.replace(/\./g, '\\.')}\\)`))
     expect(out).not.toMatch(/OK.*Приорбанк/)
   })
 
@@ -204,9 +207,12 @@ describe('шлюз запущен — проверяется сам шлюз', (
     expect(out).not.toContain('наполовину')
   })
 
-  it('шлюз жив, а адрес токенов не задан — половинчатая настройка названа и здесь', () => {
-    const { out } = doctor({ FAKE_GW: 'running', FAKE_API: GW, FAKE_TOKEN: '' })
-    expect(out).toContain('Приорбанк настроен наполовину (API_BASE — через шлюз crypto-gw:1080, TOKEN_URL — не задан)')
+  it.each([
+    [GW, '', 'API_BASE — через шлюз crypto-gw:1080, TOKEN_URL — не задан'],
+    ['', `${GW}/token`, 'API_BASE — не задан, TOKEN_URL — через шлюз crypto-gw:1080']
+  ])('шлюз жив, а задан только один адрес (%s | %s) — та же авария, что без шлюза', (api, token, routes) => {
+    const { out } = doctor({ FAKE_GW: 'running', FAKE_API: api, FAKE_TOKEN: token })
+    expect(out).toMatch(new RegExp(`ПЛОХО.*Приорбанк настроен наполовину \\(${routes.replace(/\./g, '\\.')}\\)`))
   })
 })
 

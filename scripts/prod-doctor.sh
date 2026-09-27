@@ -156,6 +156,17 @@ case "$prior_route" in
     prior_token="${prior_route#*|}"
     prior_routes="API_BASE — $(describe_route "$prior_api"), TOKEN_URL — $(describe_route "$prior_token")" ;;
 esac
+# Вердикт по самим адресам — ОДИН на обе ветки ниже (шлюз жив / шлюза нет): две копии разошлись бы
+# молча. Половинчатая настройка — авария, а не повод задуматься: без TOKEN_URL опрос встанет с
+# первым истёкшим токеном, без API_BASE Приорбанк не заработает вовсе.
+prior_address_problem() {
+  case "$prior_api|$prior_token" in
+    bad'|'*|*'|bad') bad "адрес Приорбанка приложение не примет ($prior_routes)" ;;
+    'none|none') return 1 ;;
+    none'|'*|*'|none') bad "Приорбанк настроен наполовину ($prior_routes)" ;;
+    *) return 1 ;;
+  esac
+}
 
 if [ "$gw_up" = 1 ]; then
   gw_log=$($DC logs --tail 40 crypto-gw 2>/dev/null)
@@ -210,11 +221,7 @@ if [ "$gw_up" = 1 ]; then
 
   # Шлюз жив, но негодный или половинчатый адрес всё равно назвать надо: иначе после
   # `make gw-start` неисправный TOKEN_URL не называл бы никто, а продление встало бы молча.
-  case "$prior_api|$prior_token" in
-    bad'|'*|*'|bad') bad "адрес Приорбанка приложение не примет ($prior_routes)" ;;
-    'none|none') ;;
-    none'|'*|*'|none') warn "Приорбанк настроен наполовину ($prior_routes)" ;;
-  esac
+  prior_address_problem || true
 else
   # ⚠ Нет шлюза — само по себе НЕ авария: с 2026-08-19 прод ходит в Приорбанк напрямую на :9344
   # (#522). Авария — только если backend настроен ходить ЧЕРЕЗ шлюз: внутренний http://-адрес
@@ -225,10 +232,8 @@ else
   else
     case "$prior_api|$prior_token" in
       'gw '*|*'|gw '*) bad "Приорбанк настроен через шлюз, а crypto-gw $gw_word — Приорбанк стоит ($prior_routes)" ;;
-      bad'|'*|*'|bad') bad "адрес Приорбанка приложение не примет ($prior_routes)" ;;
       'none|none') ok "crypto-gw не используется — Приорбанк на этом сервере не настроен" ;;
-      none'|'*|*'|none') warn "Приорбанк настроен наполовину ($prior_routes)" ;;
-      *) ok "crypto-gw не используется — Приорбанк напрямую (${prior_api#direct })" ;;
+      *) prior_address_problem || ok "crypto-gw не используется — Приорбанк напрямую (${prior_api#direct })" ;;
     esac
   fi
 fi

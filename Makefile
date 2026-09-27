@@ -346,9 +346,12 @@ deploy-install:
 	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
 	   s="./$(SRC_DIR)/deploy/bitrixvm/git-poll-deploy.sh"; b="$$HOME/bin/bank-app-deploy"; \
 	   if [ ! -r "$$s" ]; then echo "[make] нет $$s — сперва make self-update (docs/DEPLOY_BITRIXVM.md, шаг 1b)"; exit 1; fi; \
-	   if ! bash -n "$$s" || ! tail -n 1 "$$s" | grep -qx '# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ'; then \
-	     echo "[make] $$s не годится (не разбирается или обрезан) — не ставлю"; \
-	     [ ! -e "$$b" ] || echo "[make] работает прежний: $$b"; exit 1; fi; \
+	   refuse() { echo "[make] $$s $$1 — не ставлю"; \
+	     if [ -e "$$b" ] && cmp -s "$$s" "$$b"; then echo "[make] ⚠ установлен ТОТ ЖЕ скрипт — автообновление сейчас не работает"; \
+	     elif [ -e "$$b" ]; then echo "[make] остаётся установленный: $$b"; fi; exit 1; }; \
+	   bash -n "$$s" || refuse "не годится: не разбирается"; \
+	   grep -v '^[[:space:]]*$$' "$$s" | tail -n 1 | grep -qx '[[:space:]]*# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ[[:space:]]*' \
+	     || refuse "не годится: обрезан — последней строкой должна быть «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»"; \
 	   mkdir -p "$$HOME/bin" "$(CRON_DEPLOY)/state" || exit 1; \
 	   if [ -e "$$b" ] && ! cmp -s "$$s" "$$b"; then \
 	     k="$$b.bak-$$(date +%Y%m%d-%H%M%S)"; cp "$$b" "$$k" || exit 1; echo "[make] прежний скрипт сохранён: $$k"; fi; \

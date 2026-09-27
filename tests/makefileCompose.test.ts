@@ -175,27 +175,64 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('не годится')
-    expect(r.stdout).toContain('работает прежний')
+    expect(r.stdout).toContain(`остаётся установленный: ${join(home, 'bin', 'bank-app-deploy')}`)
     expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "RUN')
     expect(backups(home)).toEqual([])
   })
 
-  // Метку ставит настоящий скрипт — проверяем на нём, а не только на подставных: иначе смена его
-  // последней строки молча закрыла бы переустановку на всех серверах.
-  it('deploy-install принимает настоящий скрипт автообновления и отвергает его обрезанную копию', () => {
-    const real = readFileSync(POLLER, 'utf8')
-    const whole = cronHome()
-    withSrc(whole.dir, real)
-    const r = run(whole.dir, whole.home, 'deploy-install')
-    expect(r.stdout).not.toContain('не годится')
-    expect(readFileSync(join(whole.home, 'bin', 'bank-app-deploy'), 'utf8')).toBe(real)
-
+  it('deploy-install: отказы разведены, у обрезанного названа нужная последняя строка', () => {
+    const syntax = cronHome()
+    withSrc(syntax.dir, '#!/bin/sh\nif then\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\n')
+    expect(run(syntax.dir, syntax.home, 'deploy-install').stdout).toContain('не годится: не разбирается')
     const cut = cronHome()
-    const lines = real.split('\n')
-    withSrc(cut.dir, lines.slice(0, Math.floor(lines.length * 0.8)).join('\n') + '\n')
-    const rc = run(cut.dir, cut.home, 'deploy-install')
-    expect(rc.status).not.toBe(0)
-    expect(rc.stdout).toContain('не годится')
+    withSrc(cut.dir, '#!/bin/sh\necho half\n')
+    expect(run(cut.dir, cut.home, 'deploy-install').stdout)
+      .toContain('не годится: обрезан — последней строкой должна быть «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»')
+  })
+
+  it('deploy-install: установлен тот же негодный скрипт — так и сказано, а не «работает прежний»', () => {
+    const { dir, home } = cronHome()
+    writeFileSync(join(home, 'bin', 'bank-app-deploy'), '')
+    withSrc(dir, '')
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('установлен ТОТ ЖЕ скрипт — автообновление сейчас не работает')
+    expect(r.stdout).not.toContain('остаётся установленный')
+  })
+
+  // Метку ставит настоящий скрипт — проверяем на нём, а не только на подставных: иначе смена его
+  // последней строки молча закрыла бы переустановку на всех серверах. Установленный скрипт здесь
+  // тут же прогоняется, поэтому его настройки — заведомо безвредные: иначе он взял бы GIT_URL и
+  // STACK_DIR из окружения того, кто запустил тесты.
+  const harmless = (home: string, dir: string) => writeFileSync(join(home, 'bank-app-deploy', 'deploy.env'),
+    [`GIT_URL=${join(dir, 'no-such-repo')}`, `STACK_DIR=${dir}`, 'IMAGE_APP=x', 'IMAGE_BACKEND=y', ''].join('\n'))
+  const REAL = readFileSync(POLLER, 'utf8')
+
+  it('deploy-install принимает настоящий скрипт — и с лишней пустой строкой в конце', () => {
+    for (const body of [REAL, `${REAL}\n\n`]) {
+      const { dir, home } = cronHome()
+      harmless(home, dir)
+      withSrc(dir, body)
+      const r = run(dir, home, 'deploy-install')
+      expect(r.stdout).not.toContain('не годится')
+      expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toBe(body)
+    }
+  })
+
+  // Обрезка по границе, которую `bash -n` ПРОПУСКАЕТ: иначе тест проверял бы синтаксис, а не метку.
+  it.each([
+    ['без блока метки', (s: string) => s.slice(0, s.indexOf('\n# ⚠ Строка ниже — метка'))],
+    ['до ветки отката', (s: string) => s.slice(0, s.indexOf('\nlog "новая версия не прошла проверку здоровья'))]
+  ])('deploy-install отвергает настоящий скрипт, обрезанный %s', (_, cutAt) => {
+    const body = `${cutAt(REAL)}\n`
+    expect(body.length).toBeLessThan(REAL.length)
+    expect(spawnSync('bash', ['-n'], { input: body }).status, 'обрезка обязана разбираться').toBe(0)
+    const { dir, home } = cronHome()
+    withSrc(dir, body)
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('не годится: обрезан')
+    expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "RUN')
   })
 
   it('deploy-install впервые и скрипт негоден — о «прежнем» не говорит: его нет', () => {
@@ -205,7 +242,8 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('не годится')
-    expect(r.stdout).not.toContain('работает прежний')
+    expect(r.stdout).not.toContain('остаётся установленный')
+    expect(r.stdout).not.toContain('ТОТ ЖЕ')
   })
 
   it('deploy-install оставляет прежний скрипт копией с отметкой времени и называет её', () => {
