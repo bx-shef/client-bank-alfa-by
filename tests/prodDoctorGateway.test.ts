@@ -19,7 +19,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { normalizeBankApiBase } from '../app/utils/bankGatewayUrl'
+import { gatewayOrigin, normalizeBankApiBase } from '../app/utils/bankGatewayUrl'
 
 const DOCTOR = resolve(__dirname, '../scripts/prod-doctor.sh')
 
@@ -229,6 +229,9 @@ describe('шлюз запущен — проверяется сам шлюз', (
 // `normalizeBankApiBase`): упрощённая копия давала «приложение не примет» на адресе, который
 // приложение принимает, — и оператор чинил бы исправный адрес вместо остановленного шлюза.
 // Сверяем обе стороны на одних и тех же адресах: разойдутся — тест покраснеет.
+// ⚠ «Через шлюз» сверяется с `gatewayOrigin` — той же функцией, по которой отвечает `/api/ready`
+// (#770): иначе доктор и проба готовности могли бы разойтись в том, используется ли шлюз, и
+// ни один тест бы этого не увидел.
 describe('разбор адреса у доктора совпадает с приложением', () => {
   const script = readFileSync(DOCTOR, 'utf8')
   const js = script.slice(script.indexOf('backend node -e \'\n') + 'backend node -e \'\n'.length, script.indexOf('\' 2>/dev/null) || prior_route=""'))
@@ -247,8 +250,8 @@ describe('разбор адреса у доктора совпадает с пр
     const doc = route(v)
     const app = normalizeBankApiBase(v)
     if (app === null) expect(doc, 'приложение не примет — доктор обязан сказать то же').toBe('bad')
-    else if (new URL(app).protocol === 'http:') expect(doc).toMatch(/^gw /)
-    else expect(doc).toMatch(/^direct /)
+    else if (gatewayOrigin(v) !== null) expect(doc, '/api/ready считает адрес шлюзом').toMatch(/^gw /)
+    else expect(doc, '/api/ready считает адрес прямым').toMatch(/^direct /)
   })
 
   it('фрагмент разбора найден в скрипте — иначе сверять было бы нечего', () => {

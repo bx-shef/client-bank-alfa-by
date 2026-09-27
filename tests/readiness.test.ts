@@ -173,4 +173,10 @@ describe('gatewayProbeBase — «шлюз в работе» derived from the two
   it('an unparseable value reads as «not in use» instead of throwing', () => {
     expect(gatewayProbeBase('http//crypto-gw', 'not a url')).toBeNull()
   })
+
+  // The function normalizes on its own: a caller that forgot `normalizeBankApiBase` must not turn a
+  // public `http://` bank address into a probe target (`http://<bank>/healthz`).
+  it('a raw public http address is never probed', () => {
+    expect(gatewayProbeBase('http://apibel.priorbank.by:9345', 'http://apibel.priorbank.by:9345/token')).toBeNull()
+  })
 })

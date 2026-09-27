@@ -18,6 +18,8 @@
 // Pure over injected probes (DI) → unit-testable without a real DB/Redis; the route wires
 // the live probes.
 
+import { gatewayOrigin } from '../../app/utils/bankGatewayUrl'
+
 export interface ReadinessChecks {
   /** Postgres reachable (SELECT 1 succeeded). */
   db: boolean
@@ -46,10 +48,11 @@ export interface ReadinessResult {
 /** Which address to probe the crypto gateway at, derived from the two INDEPENDENT Prior
  *  addresses the app actually calls. `null` = the gateway is not in use.
  *
- *  Both inputs must already be through `normalizeBankApiBase`, which accepts `http://` ONLY for
- *  an internal host — so an http address here means exactly one thing: that traffic goes through
- *  the gateway. "In use" is derived from the addresses rather than from a separate flag, because
- *  a flag would drift from reality and reporting reality is the whole point of the field.
+ *  «Through the gateway» is decided by `gatewayOrigin` (app/utils/bankGatewayUrl.ts) — the same
+ *  rule `make doctor` is checked against, so the two cannot drift apart again (#770 was exactly
+ *  that drift: a prefix check here missed `HTTP://…`). "In use" is derived from the addresses rather
+ *  than from a separate flag, because a flag would drift from reality and reporting reality is the
+ *  whole point of the field.
  *
  *  ⚠ BOTH addresses are checked, and that is not belt-and-braces. The documented production shape
  *  is the token endpoint behind the gateway with the resource API still on the bank's public host
@@ -57,35 +60,12 @@ export interface ReadinessResult {
  *  goes through it, and a responder would read the one field meant to answer «is the gateway up?»
  *  as «not my problem», in exactly the outage it exists for.
  *
- *  ⚠ The scheme is read through `URL`, never by string prefix (#770). `normalizeBankApiBase` keeps
- *  the case the operator typed, while for `URL` — and so for the transport — `HTTP://crypto-gw:1080`
- *  is plain `http:`. A prefix check reported «шлюз не используется» for exactly that address while
- *  every Prior call went through the gateway: the field stayed silent about the one dependency it
- *  exists to report.
- *
  *  Lives here, not inline in the route, because route bodies carry no tests in this codebase:
  *  inlined, the check above silently reverted to API-base-only would still pass the whole suite. */
 export function gatewayProbeBase(apiBase: string | null, tokenUrl: string | null): string | null {
-  // Probe whichever address is internal; when both are, the API base wins (arbitrary but stable —
-  // in that configuration they are the same gateway anyway). Both are cut back to their ORIGIN:
-  // the token URL is a full endpoint (`…/token`), and the origin also canonicalizes the case, so
-  // the probe never depends on how the operator typed the scheme.
-  const api = viaGatewayOrigin(apiBase)
-  if (api) return api
-  return viaGatewayOrigin(tokenUrl)
-}
-
-/** Origin of a plain-http address (= through the gateway, see `gatewayProbeBase`), else `null`.
- *  An unparseable value reads as «not through the gateway» rather than throwing: this feeds a
- *  readiness probe, which must answer even when the configuration is wrong. */
-function viaGatewayOrigin(value: string | null): string | null {
-  if (!value) return null
-  try {
-    const url = new URL(value)
-    return url.protocol === 'http:' ? url.origin : null
-  } catch {
-    return null
-  }
+  // Probe whichever address goes through the gateway; when both do, the API base wins (arbitrary
+  // but stable — in that configuration they are the same gateway anyway).
+  return gatewayOrigin(apiBase) ?? gatewayOrigin(tokenUrl)
 }
 
 export interface ReadinessDeps {

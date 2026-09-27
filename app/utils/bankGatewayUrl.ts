@@ -88,6 +88,32 @@ export function normalizeBankApiBase(raw: string | null | undefined): string | n
 }
 
 /**
+ * Origin of the crypto gateway when this bank address goes through it, else `null`.
+ *
+ * The gateway accepts plain HTTP from us, and `normalizeBankApiBase` admits `http://` only for an
+ * internal host — so «through the gateway» is exactly «a usable backend address over `http:`». The
+ * value is normalized HERE, so a caller cannot forget to (a raw public `http://` must never become
+ * a probe target). Returned as an origin: callers probe the gateway's own root, and the origin also
+ * canonicalizes the case.
+ *
+ * ⚠ The scheme is read through `URL`, never by string prefix (#770): `normalizeBankApiBase` keeps
+ * the case the operator typed (`HTTP://crypto-gw:1080`), while for `URL` — and so for the transport
+ * — it is plain `http:`. A prefix check reported «шлюз не используется» for exactly that address
+ * while every Prior call went through the gateway.
+ *
+ * ⚠ One rule for two readers: `/api/ready` (`gatewayProbeBase`) and `make doctor`, whose node copy is
+ * checked against this function by tests/prodDoctorGateway.test.ts. `envCheck` asks a DIFFERENT
+ * question on purpose — «does this point inside our network», any scheme — and must not use it: an
+ * internal `https://` address is not «through the gateway», but it is still half of a split setup.
+ */
+export function gatewayOrigin(raw: string | null | undefined): string | null {
+  const value = normalizeBankApiBase(raw)
+  if (!value) return null
+  const url = new URL(value)
+  return url.protocol === 'http:' ? url.origin : null
+}
+
+/**
  * Validate the origin the ADMIN'S BROWSER opens (the bank's authorize page).
  *
  * Always `https://`, and never an internal host: this URL leaves our network entirely — we hand it

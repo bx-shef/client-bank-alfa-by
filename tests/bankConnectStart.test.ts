@@ -49,4 +49,37 @@ describe('bankConnectConfigFromEnv', () => {
     expect(bankConnectConfigFromEnv('prior-by')).toBeNull()
     expect(bankConnectConfigFromEnv('manual')).toBeNull()
   })
+
+  // ⚠ Схема адреса — то же правило, что у продления (`bankCredsFromEnv` → `normalizeBankApiBase`).
+  // Прежняя регулярка пропускала `http://` на ПУБЛИЧНЫЙ хост: обмен ключа отправил бы бессрочный
+  // ключ API и `client_secret` открытым текстом. Мутация «вернуть регулярку» валит этот тест.
+  it('http:// на публичный хост — отказ: ключ API не уходит открытым текстом', () => {
+    process.env.ALFA_OAUTH_CLIENT_ID = 'CID'
+    process.env.ALFA_OAUTH_TOKEN_URL = 'http://developerhub.alfabank.by:8273/token'
+    expect(bankConnectConfigFromEnv('alfa-by')).toBeNull()
+  })
+
+  // Обратная сторона той же регулярки: `HTTPS://` продление принимало, а подключение ключом
+  // отвечало «не настроено» при заданных переменных (#770).
+  it('схема в верхнем регистре принимается — как у продления', () => {
+    process.env.ALFA_OAUTH_CLIENT_ID = 'CID'
+    process.env.ALFA_OAUTH_TOKEN_URL = 'HTTPS://alfa:8273/token'
+    expect(bankConnectConfigFromEnv('alfa-by')).toEqual({ baseUrl: 'HTTPS://alfa:8273', clientId: 'CID' })
+  })
+
+  it('http:// на внутренний адрес допустим — правило то же, что у всех банковских адресов', () => {
+    process.env.ALFA_OAUTH_CLIENT_ID = 'CID'
+    process.env.ALFA_OAUTH_TOKEN_URL = 'http://localhost:8273/token'
+    expect(bankConnectConfigFromEnv('alfa-by')).toEqual({ baseUrl: 'http://localhost:8273', clientId: 'CID' })
+  })
+
+  // `URL` разбирает `https:///token` как хост `token`, то есть правило адреса его пропускает;
+  // без отдельной проверки хоста обмен ушёл бы на `https:///token`.
+  it('адрес без хоста — отказ', () => {
+    process.env.ALFA_OAUTH_CLIENT_ID = 'CID'
+    process.env.ALFA_OAUTH_TOKEN_URL = 'https:///token'
+    expect(bankConnectConfigFromEnv('alfa-by')).toBeNull()
+    process.env.ALFA_OAUTH_TOKEN_URL = '/token'
+    expect(bankConnectConfigFromEnv('alfa-by')).toBeNull()
+  })
 })
