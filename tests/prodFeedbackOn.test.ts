@@ -53,6 +53,10 @@ describe('чистые функции', () => {
   it('репозиторий: «ок» только при ЯВНОМ private:true', () => {
     expect(callFn('repo_verdict', ['200', '{"id":1,\n  "private": true,\n  "name":"x"}'])).toBe('ok')
     expect(callFn('repo_verdict', ['200', '{"private": false}'])).toBe('public')
+    // ⚠ Публичный репозиторий из приватного шаблона: `"private":true` есть, но во вложенном объекте.
+    const fromTemplate = '{"id":1,"owner":{"login":"o","type":"Organization"},"private":false,'
+      + '"description":"x","template_repository":{"id":2,"private":true}}'
+    expect(callFn('repo_verdict', ['200', fromTemplate])).toBe('public')
     // ⚠ Нечитаемое тело — не повод считать репозиторий приватным.
     expect(callFn('repo_verdict', ['200', '<html>'])).toBe('unexpected')
     expect(callFn('repo_verdict', ['401', ''])).toBe('unauthorized')
@@ -363,6 +367,14 @@ describe('сквозной прогон', () => {
     expect(r.out).toContain('Issues: Read and write')
     expect(r.env).toBe(ENV_BEFORE)
     expect(r.backups).toEqual([])
+  })
+
+  // `\r` сюда не подаём: в терминале с ICRNL (умолчание) он превращается в конец строки раньше,
+  // чем его увидит скрипт, — тест проверял бы не то, что написано в названии.
+  it('вставка с телефона: пробелы по краям токена срезаются, а не дают «не похоже на токен»', () => {
+    const r = e2e({ token: `  ${FINE} ` })
+    expect(r.code, r.out).toBe(0)
+    expect(r.env).toContain(`GITHUB_FEEDBACK_TOKEN=${FINE}\n`)
   })
 
   it('не закрылась проверочная задача — канал всё равно включается, номер назван', () => {

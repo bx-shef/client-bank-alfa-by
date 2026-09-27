@@ -76,15 +76,19 @@ token_kind() {
 # Ответ на GET /repos/<repo> → ok | public | unauthorized | forbidden | notfound | unreachable | unexpected.
 # ⚠ `ok` — только при ЯВНОМ `"private":true`. Нечитаемое тело не повод считать репозиторий
 # приватным: цена ошибки в эту сторону — финансовые данные клиентов в публичных задачах.
+# ⚠ Берётся ПЕРВОЕ вхождение поля, а не любое: своё `"private"` есть и во вложенных объектах
+# (`template_repository`, `parent`, `source`), и у публичного репозитория, созданного из
+# приватного шаблона, подстрока `"private":true` в ответе есть. Верхнеуровневое поле GitHub
+# отдаёт раньше вложенных объектов, а в `owner`, который идёт перед ним, такого поля нет.
 repo_verdict() {
-  local code="${1:-}" flat
-  flat="$(printf '%s' "${2:-}" | tr -d ' \n\t\r')"
+  local code="${1:-}" first
+  first="$(printf '%s' "${2:-}" | tr -d ' \n\t\r' | grep -o '"private":[a-z]*' | head -1)"
   case "$code" in
     200)
-      case "$flat" in
-        *'"private":true'*)  printf 'ok' ;;
-        *'"private":false'*) printf 'public' ;;
-        *)                   printf 'unexpected' ;;
+      case "$first" in
+        '"private":true')  printf 'ok' ;;
+        '"private":false') printf 'public' ;;
+        *)                 printf 'unexpected' ;;
       esac ;;
     401) printf 'unauthorized' ;;
     403) printf 'forbidden' ;;
@@ -217,6 +221,10 @@ echo "Репозиторий-приёмник: $REPO"
 printf 'Токен GitHub (fine-grained, ввод не отображается): '
 IFS= read -r -s TOKEN
 echo
+# Вставка с телефона приносит `\r` и пробелы по краям — внутри токена их не бывает.
+TOKEN="${TOKEN//$'\r'/}"
+TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
+TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
 
 case "$(token_kind "$TOKEN")" in
   fine) ;;
