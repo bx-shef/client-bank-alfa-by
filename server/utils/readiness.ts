@@ -57,16 +57,35 @@ export interface ReadinessResult {
  *  goes through it, and a responder would read the one field meant to answer «is the gateway up?»
  *  as «not my problem», in exactly the outage it exists for.
  *
+ *  ⚠ The scheme is read through `URL`, never by string prefix (#770). `normalizeBankApiBase` keeps
+ *  the case the operator typed, while for `URL` — and so for the transport — `HTTP://crypto-gw:1080`
+ *  is plain `http:`. A prefix check reported «шлюз не используется» for exactly that address while
+ *  every Prior call went through the gateway: the field stayed silent about the one dependency it
+ *  exists to report.
+ *
  *  Lives here, not inline in the route, because route bodies carry no tests in this codebase:
  *  inlined, the check above silently reverted to API-base-only would still pass the whole suite. */
 export function gatewayProbeBase(apiBase: string | null, tokenUrl: string | null): string | null {
-  const internal = (v: string | null) => Boolean(v && v.startsWith('http://'))
   // Probe whichever address is internal; when both are, the API base wins (arbitrary but stable —
-  // in that configuration they are the same gateway anyway). The token URL is a full endpoint
-  // (`…/token`), so it is cut back to its origin; the API base already is one.
-  if (internal(apiBase)) return apiBase
-  if (internal(tokenUrl)) return new URL(tokenUrl!).origin
-  return null
+  // in that configuration they are the same gateway anyway). Both are cut back to their ORIGIN:
+  // the token URL is a full endpoint (`…/token`), and the origin also canonicalizes the case, so
+  // the probe never depends on how the operator typed the scheme.
+  const api = viaGatewayOrigin(apiBase)
+  if (api) return api
+  return viaGatewayOrigin(tokenUrl)
+}
+
+/** Origin of a plain-http address (= through the gateway, see `gatewayProbeBase`), else `null`.
+ *  An unparseable value reads as «not through the gateway» rather than throwing: this feeds a
+ *  readiness probe, which must answer even when the configuration is wrong. */
+function viaGatewayOrigin(value: string | null): string | null {
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' ? url.origin : null
+  } catch {
+    return null
+  }
 }
 
 export interface ReadinessDeps {
