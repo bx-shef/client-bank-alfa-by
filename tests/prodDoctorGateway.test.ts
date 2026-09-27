@@ -188,6 +188,11 @@ describe('шлюза нет или он остановлен — вердикт 
 })
 
 describe('шлюз запущен — проверяется сам шлюз', () => {
+  it('и адрес, который приложение не примет, всё равно назван — иначе после gw-start его не назвал бы никто', () => {
+    const { out } = doctor({ FAKE_GW: 'running', FAKE_API: GW, FAKE_TOKEN: 'crypto-gw:1080/oauth2/token' })
+    expect(out).toMatch(/ПЛОХО.*адрес Приорбанка приложение не примет \(API_BASE — через шлюз crypto-gw:1080, TOKEN_URL — приложение не примет\)/)
+  })
+
   it.each(['running', 'restarting'])('%s: пробы идут, вердикт «шлюза нет» не печатается', (state) => {
     const { out } = doctor({ FAKE_GW: state, FAKE_API: GW, FAKE_TOKEN: `${GW}/token` })
     expect(out).toContain('банк отвечает через шлюз')

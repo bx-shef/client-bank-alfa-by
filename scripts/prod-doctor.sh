@@ -99,6 +99,64 @@ case "$gw_state" in
   exited|created|dead) gw_up=0; gw_word="остановлен ($gw_state)" ;;
   *) gw_up=1 ;;
 esac
+# ⚠ Адресов ДВА — API_BASE (опрос, согласие, счета) и TOKEN_URL (продление токена), и переезд
+# между шлюзом и прямым адресом бывает половинчатым: по одному API_BASE мы объявили бы «напрямую»,
+# а продление через час упёрлось бы в остановленный шлюз.
+# ⚠ Адрес разбирает `URL` внутри backend, а печатаются только схема и хост: значение целиком
+# унесло бы в терминал учётные данные, если их вписали в адрес, и управляющие последовательности.
+# Разбор — тот же `URL`, что у приложения (`normalizeBankApiBase`): пробелы по краям снимаются,
+# `HTTP://` равен `http://`, а не разобранный адрес приложение не примет. Открытый `http://`
+# приложение пускает только на внутренний хост — это и есть шлюз; на публичный он не годится, и
+# опечатка `http://` вместо `https://` к банку читается как «не примет», а не «нужен шлюз».
+# Правило внутреннего хоста — копия `isInternalHost` (bankGatewayUrl.ts): упрощённое дало бы ложное
+# «приложение не примет» на адресе, который приложение принимает. Расхождение ловит
+# tests/prodDoctorGateway.test.ts — сверкой с `normalizeBankApiBase` на одних и тех же адресах.
+# ⚠ Читаем у работающего процесса, а не в .env: важно, что получил он. Упавший exec (backend
+# лежит) — «не проверить», а не «Приорбанк не настроен». `NODE_OPTIONS` пуст — см. пробы шлюза ниже.
+prior_route=$($DC exec -T -e NODE_OPTIONS= backend node -e '
+const internal = host => {
+  const h = host.toLowerCase().replace(/\.$/, "")
+  if (h === "localhost") return true
+  if (h.startsWith("[") && h.endsWith("]")) {
+    const v6 = h.slice(1, -1)
+    return v6 === "::1" || v6 === "::" || v6.startsWith("::ffff:")
+      || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)
+  }
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
+  if (m) {
+    const a = +m[1], b = +m[2]
+    return a === 127 || a === 0 || a === 10 || (a === 192 && b === 168)
+      || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)
+  }
+  return !h.includes(".") && !h.includes(":")
+}
+const route = v => {
+  v = (v || "").trim()
+  if (!v) return "none"
+  let u
+  try { u = new URL(v) } catch { return "bad" }
+  if (u.protocol === "https:") return "direct " + u.host
+  if (u.protocol === "http:" && internal(u.hostname)) return "gw " + u.host
+  return "bad"
+}
+process.stdout.write(route(process.env.PRIOR_OAUTH_API_BASE) + "|" + route(process.env.PRIOR_OAUTH_TOKEN_URL))
+' 2>/dev/null) || prior_route=""
+describe_route() {
+  case "$1" in
+    none) printf 'не задан' ;;
+    bad) printf 'приложение не примет' ;;
+    'direct '*) printf 'напрямую %s' "${1#direct }" ;;
+    'gw '*) printf 'через шлюз %s' "${1#gw }" ;;
+  esac
+}
+prior_api=""; prior_token=""; prior_routes=""
+case "$prior_route" in
+  *'|'*)
+    prior_api="${prior_route%%|*}"
+    prior_token="${prior_route#*|}"
+    prior_routes="API_BASE — $(describe_route "$prior_api"), TOKEN_URL — $(describe_route "$prior_token")" ;;
+esac
+
 if [ "$gw_up" = 1 ]; then
   gw_log=$($DC logs --tail 40 crypto-gw 2>/dev/null)
 
@@ -149,75 +207,28 @@ if [ "$gw_up" = 1 ]; then
   denied=$($DC exec -T -e NODE_OPTIONS= backend node -e "fetch('http://crypto-gw:1080/no-such-route',{signal:AbortSignal.timeout(10000)}).then(r=>console.log(r.status)).catch(e=>console.log('ERR',(e.cause&&e.cause.code)||e.name))" 2>/dev/null | tr -d '[:space:]')
   if [ "$denied" = "404" ]; then ok "неразрешённый путь отбивается шлюзом (404) — список применяется"
   else bad "неразрешённый путь дал «$denied» вместо 404 — allowlist НЕ применяется, шлюз шире, чем задумано"; fi
+
+  # Шлюз жив, но адрес, который приложение не примет, всё равно назвать надо: иначе после
+  # `make gw-start` неисправный TOKEN_URL не называл бы никто, а продление встало бы молча.
+  case "$prior_api|$prior_token" in
+    bad'|'*|*'|bad') bad "адрес Приорбанка приложение не примет ($prior_routes)" ;;
+  esac
 else
   # ⚠ Нет шлюза — само по себе НЕ авария: с 2026-08-19 прод ходит в Приорбанк напрямую на :9344
   # (#522). Авария — только если backend настроен ходить ЧЕРЕЗ шлюз: внутренний http://-адрес
   # (правило — bankGatewayUrl.ts), за которым никто не слушает. Прежнее безусловное «прод
   # Приорбанка недоступен» было ложью на каждом сервере без шлюза (#767).
-  # ⚠ Адресов ДВА — API_BASE (опрос, согласие, счета) и TOKEN_URL (продление токена), и переезд
-  # между шлюзом и прямым адресом бывает половинчатым: по одному API_BASE мы объявили бы «напрямую»,
-  # а продление через час упёрлось бы в остановленный шлюз.
-  # ⚠ Адрес разбирает `URL` внутри backend, а печатаются только схема и хост: значение целиком
-  # унесло бы в терминал учётные данные, если их вписали в адрес, и управляющие последовательности.
-  # Разбор — тот же `URL`, что у приложения (`normalizeBankApiBase`): пробелы по краям снимаются,
-  # `HTTP://` равен `http://`, а не разобранный адрес приложение не примет. Открытый `http://`
-  # приложение пускает только на внутренний хост — это и есть шлюз; на публичный он не годится, и
-  # опечатка `http://` вместо `https://` к банку читается как «не примет», а не «нужен шлюз».
-  # Правило внутреннего хоста — копия `isInternalHost` (bankGatewayUrl.ts): упрощённое дало бы ложное
-  # «приложение не примет» на адресе, который приложение принимает. Расхождение ловит
-  # tests/prodDoctorGateway.test.ts — сверкой с `normalizeBankApiBase` на одних и тех же адресах.
-  # ⚠ Читаем у работающего процесса, а не в .env: важно, что получил он. Упавший exec (backend
-  # лежит) — «не проверить», а не «Приорбанк не настроен». `NODE_OPTIONS` пуст — см. пробы выше.
-  prior_route=$($DC exec -T -e NODE_OPTIONS= backend node -e '
-const internal = host => {
-  const h = host.toLowerCase().replace(/\.$/, "")
-  if (h === "localhost") return true
-  if (h.startsWith("[") && h.endsWith("]")) {
-    const v6 = h.slice(1, -1)
-    return v6 === "::1" || v6 === "::" || v6.startsWith("::ffff:")
-      || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)
-  }
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
-  if (m) {
-    const a = +m[1], b = +m[2]
-    return a === 127 || a === 0 || a === 10 || (a === 192 && b === 168)
-      || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)
-  }
-  return !h.includes(".") && !h.includes(":")
-}
-const route = v => {
-  v = (v || "").trim()
-  if (!v) return "none"
-  let u
-  try { u = new URL(v) } catch { return "bad" }
-  if (u.protocol === "https:") return "direct " + u.host
-  if (u.protocol === "http:" && internal(u.hostname)) return "gw " + u.host
-  return "bad"
-}
-process.stdout.write(route(process.env.PRIOR_OAUTH_API_BASE) + "|" + route(process.env.PRIOR_OAUTH_TOKEN_URL))
-' 2>/dev/null) || prior_route=""
-  describe_route() {
-    case "$1" in
-      none) printf 'не задан' ;;
-      bad) printf 'приложение не примет' ;;
-      'direct '*) printf 'напрямую %s' "${1#direct }" ;;
-      'gw '*) printf 'через шлюз %s' "${1#gw }" ;;
+  if [ -z "$prior_routes" ]; then
+    warn "crypto-gw $gw_word; нужен ли он, не проверить — backend не ответил на exec"
+  else
+    case "$prior_api|$prior_token" in
+      'gw '*|*'|gw '*) bad "Приорбанк настроен через шлюз, а crypto-gw $gw_word — Приорбанк стоит ($prior_routes)" ;;
+      bad'|'*|*'|bad') bad "адрес Приорбанка приложение не примет ($prior_routes)" ;;
+      'none|none') ok "crypto-gw не используется — Приорбанк на этом сервере не настроен" ;;
+      none'|'*|*'|none') warn "Приорбанк настроен наполовину ($prior_routes)" ;;
+      *) ok "crypto-gw не используется — Приорбанк напрямую (${prior_api#direct })" ;;
     esac
-  }
-  case "$prior_route" in
-    *'|'*)
-      prior_api="${prior_route%%|*}"
-      prior_token="${prior_route#*|}"
-      routes="API_BASE — $(describe_route "$prior_api"), TOKEN_URL — $(describe_route "$prior_token")"
-      case "$prior_api|$prior_token" in
-        'gw '*|*'|gw '*) bad "Приорбанк настроен через шлюз, а crypto-gw $gw_word — Приорбанк стоит ($routes)" ;;
-        bad'|'*|*'|bad') bad "адрес Приорбанка приложение не примет ($routes)" ;;
-        'none|none') ok "crypto-gw не используется — Приорбанк на этом сервере не настроен" ;;
-        none'|'*|*'|none') warn "Приорбанк настроен наполовину ($routes)" ;;
-        *) ok "crypto-gw не используется — Приорбанк напрямую (${prior_api#direct })" ;;
-      esac ;;
-    *) warn "crypto-gw $gw_word; нужен ли он, не проверить — backend не ответил на exec" ;;
-  esac
+  fi
 fi
 
 say "Жалобы в логах (последний час)"

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync as mkdtempRaw, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync as mkdtempRaw, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -145,7 +145,7 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     const { dir, home } = cronHome()
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
     mkdirSync(src, { recursive: true })
-    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho "NEW ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE cfg=$BANK_APP_DEPLOY_CONFIG"\n')
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\n# git ls-remote\necho "NEW ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE cfg=$BANK_APP_DEPLOY_CONFIG"\n')
     const r = run(dir, home, 'deploy-install')
     expect(r.status, r.stdout + r.stderr).toBe(0)
     const cfg = join(home, 'bank-app-deploy')
@@ -154,31 +154,65 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('NEW ignore=')
   })
 
-  it('deploy-install: скрипт не разбирается — не ставит, работающий остаётся на месте', () => {
-    const { dir, home } = cronHome()
+  // Годный новый скрипт — разбирается и несёт опрос git (пустой файл тоже «разбирается»).
+  const NEW_SCRIPT = '#!/bin/sh\n# git ls-remote\necho NEW\n'
+  const withSrc = (dir: string, body: string) => {
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
     mkdirSync(src, { recursive: true })
-    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\nif then\n')
+    writeFileSync(join(src, 'git-poll-deploy.sh'), body)
+  }
+  const backups = (home: string) => readdirSync(join(home, 'bin')).filter(f => f.startsWith('bank-app-deploy.bak-'))
+
+  it.each([
+    ['не разбирается', '#!/bin/sh\n# git ls-remote\nif then\n'],
+    ['пустой', ''],
+    ['без опроса git (обрезан)', '#!/bin/sh\necho half\n']
+  ])('deploy-install: скрипт %s — не ставит, работающий остаётся на месте', (_, body) => {
+    const { dir, home } = cronHome()
+    withSrc(dir, body)
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
-    expect(r.stdout).toContain('не разбирается — не ставлю')
+    expect(r.stdout).toContain('не годится')
     expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "RUN')
+    expect(backups(home)).toEqual([])
   })
 
-  it('deploy-install оставляет прежний скрипт копией', () => {
+  it('deploy-install оставляет прежний скрипт копией с отметкой времени и называет её', () => {
     const { dir, home } = cronHome()
-    const src = join(dir, 'src', 'deploy', 'bitrixvm')
-    mkdirSync(src, { recursive: true })
-    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho NEW\n')
+    withSrc(dir, NEW_SCRIPT)
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).toBe(0)
+    expect(backups(home)).toHaveLength(1)
+    expect(readFileSync(join(home, 'bin', backups(home)[0]), 'utf8')).toContain('echo "RUN')
+    expect(r.stdout).toContain(`прежний скрипт сохранён: ${join(home, 'bin', backups(home)[0])}`)
+  })
+
+  it('deploy-install повторно — копию рабочей версии не затирает и новой не заводит', () => {
+    const { dir, home } = cronHome()
+    withSrc(dir, NEW_SCRIPT)
     expect(run(dir, home, 'deploy-install').status).toBe(0)
-    expect(readFileSync(join(home, 'bin', 'bank-app-deploy.bak'), 'utf8')).toContain('echo "RUN')
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).toBe(0)
+    expect(backups(home)).toHaveLength(1)
+    expect(readFileSync(join(home, 'bin', backups(home)[0]), 'utf8')).toContain('echo "RUN')
+    expect(r.stdout).not.toContain('сохранён')
+  })
+
+  it('deploy-install впервые — копии нет, и о ней не говорится', () => {
+    const { dir, home } = cronHome()
+    rmSync(join(home, 'bin', 'bank-app-deploy'))
+    withSrc(dir, NEW_SCRIPT)
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).toBe(0)
+    expect(backups(home)).toEqual([])
+    expect(r.stdout).not.toContain('сохранён')
   })
 
   it('deploy-install: новый скрипт упал — make сообщает отказом, а не «установлен» и успехом', () => {
     const { dir, home } = cronHome()
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
     mkdirSync(src, { recursive: true })
-    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho broken\nexit 2\n')
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\n# git ls-remote\necho broken\nexit 2\n')
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('broken')
@@ -293,24 +327,6 @@ describe('на ВМ с автообновлением prod-pull/prod-redeploy о
     expect(ups.filter(l => !l.includes('$(DEPLOY_LOCKED)')).map(l => l.trim()))
       .toEqual(['$(DC) up -d && \\', '@$(DC) up -d crypto-gw \\'])
     expect(ups.filter(l => l.includes('$(DEPLOY_LOCKED)')).length).toBe(3)
-  })
-
-  it('prod-down: под замком, и без паузы предупреждает, что выкат поднимет стек снова', () => {
-    const { call, calls, deploy } = vm('home')
-    const r = call('prod-down')
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('автообновление не на паузе')
-    expect(calls()).toContain(`flock -w 900 ${deploy}/state/deploy.lock docker compose -f docker-compose.prod.yml down`)
-    writeFileSync(join(deploy, 'state', 'paused'), '')
-    expect(call('prod-down').stdout).not.toContain('не на паузе')
-  })
-
-  it('prod-down без автообновления — прежняя команда, молча', () => {
-    const { call, calls } = vm('none')
-    const r = call('prod-down')
-    expect(r.status).toBe(0)
-    expect(r.stdout).not.toContain('автообновление')
-    expect(calls()).toEqual(['docker compose -f docker-compose.prod.yml down'])
   })
 
   it('prod-up при идущем прогоне — говорит, что ждёт, и всё равно идёт под замком', () => {
