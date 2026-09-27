@@ -438,6 +438,8 @@ for (const a of [...foreign.values()].slice(0, MAX_ACCOUNTS)) {
   // Opening + credits − debits = closing, for a pair of fields that are NOT the matched turnovers
   // themselves: when turnovers reconcile, «credTurnover − debTurnover = net» holds by arithmetic
   // and would pass for a balance check with no balance anywhere in the response.
+  // ⚠ A balance-only match is kept APART from matched turnovers in the verdict: any two fields that
+  // happen to differ by `net` pass this test, so only their names tell a balance from a coincidence.
   const amt = sums.get('amount') ?? { C: 0, D: 0 }
   const net = amt.C - amt.D
   const balance = []
@@ -450,7 +452,7 @@ for (const a of [...foreign.values()].slice(0, MAX_ACCOUNTS)) {
     }
     say(`  сальдо (входящее + приходы − расходы = исходящее): ${balance.length ? `сходится для ${balance.join('; ')}` : 'не сходится ни для одной пары полей'}`)
   }
-  verdicts.push({ account: a, rows: rows.length, zero, zeroCodes, revalZero, revalPaid, curr, paid: paidRows.length, matched: matched.length + balance.length > 0, statsState, paidRows })
+  verdicts.push({ account: a, rows: rows.length, zero, zeroCodes, revalZero, revalPaid, curr, paid: paidRows.length, matched: matched.length > 0, balance: balance.length > 0, statsState, paidRows })
 }
 
 // ── Plan B for question 1: amounts, only on explicit request ──
@@ -474,9 +476,10 @@ for (const v of verdicts) {
   say(`  ${tag}:`)
   const q1 = !v.paid ? 'операций с деньгами нет — сравнивать нечего'
     : v.matched ? 'суммы сошлись с полями statistics (выше) — по имени поля видно, в какой валюте amount'
-      : v.statsState === 'empty' ? `statistics[] пуст — сверить не с чем; ${planB}`
-        : v.statsState === 'other' ? `записи statistics[] для этого счёта нет; ${planB}`
-          : `с полями statistics не сошлась ни одна сумма; ${planB}`
+      : v.balance ? `обороты не сошлись, сошлось только сальдо (выше) — если это входящий и исходящий остатки, валюту amount назовут их имена; иначе ${planB}`
+        : v.statsState === 'empty' ? `statistics[] пуст — сверить не с чем; ${planB}`
+          : v.statsState === 'other' ? `записи statistics[] для этого счёта нет; ${planB}`
+            : `с полями statistics не сошлась ни одна сумма; ${planB}`
   say(`   1. Валюта суммы: ${q1}`)
   const q2 = v.revalPaid ? `\x1b[31m⚠ приходит С СУММОЙ — ${v.revalPaid} строк; рубеж по сумме их НЕ отсеет, в CRM они попадут как платежи\x1b[0m`
     : v.revalZero ? `приходит с нулевой суммой — ${v.revalZero} из ${v.rows}; в CRM не попадёт: её отсеивает рубеж по сумме`
