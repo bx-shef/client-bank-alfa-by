@@ -1,6 +1,6 @@
 .PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
         prior-probe prior-switch poll-check payers self-update help \
-        gw-stop gw-start compose-update alfa-page-probe reap-status reap-off \
+        gw-stop gw-start compose-update alfa-page-probe alfa-currency-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
         bank-connect-log chat-log feedback-on \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume
@@ -432,6 +432,30 @@ alfa-page-probe:
 	@t=$$(mktemp /tmp/alfa-page-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-alfa-page-probe.sh" \
 	  && B24="$${B24:-}" bash "$$t" "$${DAY:-}"
+
+## Что API Альфы отдаёт по ВАЛЮТНОМУ счёту: суммы, переоценка, statistics[] (#735)
+#
+#   make alfa-currency-probe                                  # за 30 дней по вчера
+#   FROM=2026-08-01 TO=2026-08-31 make alfa-currency-probe    # за свой период (до 93 дней)
+#   B24=xxx.bitrix24.by make alfa-currency-probe              # если Альфа на нескольких порталах
+#   AMOUNTS=1 make alfa-currency-probe                        # план Б: показать суммы (НЕ пересылать)
+#
+# ⚠ Read-only: `GET /accounts/` каждым сохранённым ключом Альфы портала и выписка по каждому
+# валютному счёту (до 5 за прогон), постранично — как у боевого опроса. Ходит уже сохранёнными
+# access-токенами; refresh не трогает — банк ротирует его, и ручное обновление рассинхронизировало
+# бы базу с банком (#505/#509).
+#
+# ⚠ Сумм, назначений и контрагентов в выводе нет, номера счетов замаскированы — его можно
+# пересылать. Вопрос «в какой валюте amount» решается сверкой сумм с полями `statistics[]`, а
+# печатаются только ИМЕНА совпавших полей. Не сошлось — план Б: `AMOUNTS=1` покажет суммы, их
+# сверяют с интернет-банком сами, а вывод не пересылают.
+#
+# ⚠ Параметры — ПЕРЕД make, а не после (см. правило о параметрах make в CLAUDE.md).
+alfa-currency-probe:
+	@echo "[make] скачиваю prod-alfa-currency-probe.sh из $(SRC)"
+	@t=$$(mktemp /tmp/alfa-currency-probe.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-alfa-currency-probe.sh" \
+	  && FROM="$${FROM:-}" TO="$${TO:-}" B24="$${B24:-}" AMOUNTS="$${AMOUNTS:-}" bash "$$t" "$(DC)"
 
 ## Что видит уборщик мёртвых грантов: сколько порталов помечено и что он делал (#574)
 #

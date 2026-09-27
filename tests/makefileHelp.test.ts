@@ -61,7 +61,7 @@ function documented(): string[] {
 /** Цели, которые оператор набирает на СЕРВЕРЕ. Каждая обязана быть в `make help`. */
 const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps',
   'doctor', 'queue-stats', 'prior-probe', 'prior-switch', 'poll-check', 'payers', 'self-update', 'help',
-  'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe',
+  'gw-stop', 'gw-start', 'compose-update', 'alfa-page-probe', 'alfa-currency-probe',
   // #574: показать, кого уборщик считает мёртвым, и аварийно выключить стирание.
   'reap-status', 'reap-off',
   // #488: две колонки `bank_tokens`, которые переживают перевыкат, — единственный способ отличить
@@ -130,7 +130,7 @@ describe('операторские цели Makefile видны в `make help`',
     // `make цель VAR=…` никто не отменял, она работает и остаётся опасной. Общее правило
     // («не вставляй строку `make …`, которую не составил сам») записано в OPERATIONS.md и здесь
     // не дублируется. Гард лишь не даёт безопасной форме перестать работать.
-    const PARAMS = ['DAY', 'DOMAIN', 'HOST', 'TO', 'CONSENT', 'SINCE', 'CONFIRM', 'PORT']
+    const PARAMS = ['DAY', 'DOMAIN', 'HOST', 'TO', 'CONSENT', 'SINCE', 'CONFIRM', 'PORT', 'FROM', 'B24', 'AMOUNTS']
     for (const line of MAKEFILE.split('\n')) {
       if (!line.startsWith('\t')) continue // только рецепты
       for (const v of PARAMS) {
