@@ -18,6 +18,7 @@
 //     сам начинает плодить дубли, ради борьбы с которыми его и ставят.
 
 import { PUBLIC_ROUTES, absoluteUrl } from '~/config/routes'
+import { DEFAULT_AUTHOR_NAME } from '~/utils/build'
 
 /**
  * Канонический адрес лендинга. Совпадает с `NUXT_PUBLIC_SITE_URL` из `.env.example`, но НЕ зависит
@@ -27,8 +28,9 @@ import { PUBLIC_ROUTES, absoluteUrl } from '~/config/routes'
 export const LANDING_SITE_URL = 'https://bank-import.bx-shef.by'
 
 /** Имя издателя для `og:site_name`. ⚠ НЕ равно заголовку страницы: у соседа так и было, и карточка
- *  шаринга печатала одну и ту же фразу дважды. Здесь это тот, кто публикует, а не что публикуют. */
-export const LANDING_PUBLISHER = 'ИП Шевчик И. С.'
+ *  шаринга печатала одну и ту же фразу дважды. Здесь это тот, кто публикует, а не что публикуют.
+ *  Тот же человек, что автор в подвале, — поэтому строка берётся оттуда, а не пишется второй раз. */
+export const LANDING_PUBLISHER = DEFAULT_AUTHOR_NAME
 
 /**
  * Базовый URL для canonical / og:image / sitemap — ВСЕГДА канонический домен.

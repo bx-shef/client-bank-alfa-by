@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { buildB24FormSrc } from '~/utils/b24Form'
+import { buildB24FormSrc, resolveB24Form } from '~/utils/b24Form'
 
 // Embedded Bitrix24 CRM web-form. The form itself lives in a dedicated
 // same-origin document (`/public/b24-form.html`) served with a form-scoped CSP;
 // here we only build the iframe `src` from public config and relay the submit
-// event to Metrika. Empty config ⇒ a placeholder slot (owner sets the env vars).
+// event to Metrika. Which form: `resolveB24Form` — the configured one, else ours
+// outside local mode; nothing ⇒ a placeholder slot.
 const config = useRuntimeConfig()
+const form = resolveB24Form({
+  scriptUrl: config.public.b24FormScriptUrl,
+  formId: config.public.b24FormId,
+  formSecret: config.public.b24FormSecret
+}, useLocalMode())
+const src = buildB24FormSrc(form.scriptUrl, form.formId, form.formSecret)
 
-const src = computed(() => buildB24FormSrc(
-  config.public.b24FormScriptUrl as string,
-  config.public.b24FormId as string,
-  config.public.b24FormSecret as string
-))
+// The goal goes through the single `ym` call site, which resolves the counter id
+// the same way the snippet does (a raw config read went silent after #701).
+const { reachGoal } = useMetrikaGoal()
 
 // b24:form:submit is relayed from the iframe document via postMessage. The
 // iframe (/b24-form.html) is same-origin, so reject any other origin — otherwise
@@ -19,10 +24,7 @@ const src = computed(() => buildB24FormSrc(
 function onFrameMessage(e: MessageEvent) {
   if (e.origin !== window.location.origin) return
   if (e.data !== 'b24:form:submit') return
-  const id = Number(config.public.metrikaId)
-  if (!id) return
-  const w = window as Window & { ym?: (...args: unknown[]) => void }
-  w.ym?.(id, 'reachGoal', 'brief_submit')
+  reachGoal('brief_submit')
 }
 
 onMounted(() => window.addEventListener('message', onFrameMessage))

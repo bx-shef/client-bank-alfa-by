@@ -28,29 +28,54 @@ export function resolveRepoUrl(value: string | undefined | null): string {
 
 /**
  * Автор в подвале по умолчанию (#758, решение владельца 2026-09-27; прежнее умолчание
- * `bx-shef` / `https://bx-shef.by` снято).
- *
- * ⚠ Умолчание применяется ЗДЕСЬ, на пустое значение, а не только в `nuxt.config.ts`: пустая
- * переменная сборки перекрывает умолчание конфига (замерено: `NUXT_PUBLIC_AUTHOR_NAME=` при
- * `nuxt generate` даёт `authorName:""`), а `Dockerfile` выставляет её пустой всякий раз, когда
- * переменная репозитория не задана. У клона без переменных подвал выходил ПУСТЫМ.
+ * `bx-shef` / `https://bx-shef.by` снято). Имя — то же, что `LANDING_PUBLISHER` в `seo.ts`: это
+ * один и тот же человек, и две копии строки уже успели разойтись («И.С.» против «И. С.»), поэтому
+ * `seo.ts` берёт его отсюда. Направление такое, потому что этот модуль без зависимостей и его
+ * грузит сервер ради `/api/health`, а `seo.ts` тянет за собой таблицу маршрутов.
  */
-export const DEFAULT_AUTHOR_NAME = 'ИП Шевчик И.С.'
+export const DEFAULT_AUTHOR_NAME = 'ИП Шевчик И. С.'
 export const DEFAULT_AUTHOR_URL = 'https://offer.bx-shef.by/?ref=bank-import'
+
+/**
+ * Адрес для `href`, если это `https` без логина в адресе; иначе пусто.
+ *
+ * ⚠ Через `new URL`, а не регуляркой: `https://свой.сайт@чужой.сайт` — валидный адрес, который
+ * ведёт на `чужой.сайт`, и регулярка вида «https, потом хост» его пропускала.
+ */
+function httpsHref(value: string): string {
+  try {
+    const u = new URL(value)
+    if (u.protocol !== 'https:' || u.username || u.password || !u.hostname) return ''
+    return u.href
+  } catch {
+    return ''
+  }
+}
 
 /**
  * Автор для подвала: заданное значение или умолчание.
  *
- * ⚠ Ссылка по умолчанию идёт ТОЛЬКО вместе с именем по умолчанию: клон, вписавший своё имя без
- * адреса, получает подпись без ссылки, а не своё имя со ссылкой на наш оффер. Адрес проверяется так
- * же, как у `resolveRepoUrl`: только `https` — он попадает в `href` на каждом экране.
+ * ⚠ Умолчание применяется ЗДЕСЬ, а в `nuxt.config.ts` у ключей пусто: пустая переменная сборки
+ * перекрывает любое умолчание конфига (замерено: `NUXT_PUBLIC_AUTHOR_NAME=` при `nuxt generate`
+ * даёт `authorName:""`), а `Dockerfile` выставляет её пустой всякий раз, когда переменная
+ * репозитория не задана. У клона без переменных подвал выходил ПУСТЫМ.
+ *
+ * ⚠ Имя и ссылка идут ПАРОЙ, в обе стороны:
+ * - имени нет ⇒ наше имя и наша ссылка, даже если задан адрес: наше имя не должно вести на чужой
+ *   сайт;
+ * - имя своё ⇒ ссылка только своя: своё имя без адреса выходит подписью без ссылки, а не
+ *   ссылкой на наш оффер;
+ * - имя совпало с нашим ⇒ без адреса подставляется наш.
+ *
+ * Значения приходят через `destr` и бывают числом или булевым (`2026` → число), поэтому
+ * приводим к строке, а не зовём `.trim()` у чего попало.
  */
-export function resolveAuthor(name: string | undefined | null, url: string | undefined | null): { name: string, url: string } {
-  const n = (name ?? '').trim()
-  const u = (url ?? '').trim()
-  const validUrl = /^https:\/\/[^\s/]+(\/\S*)?$/.test(u) ? u : ''
-  if (!n) return { name: DEFAULT_AUTHOR_NAME, url: validUrl || DEFAULT_AUTHOR_URL }
-  return { name: n, url: validUrl }
+export function resolveAuthor(name: unknown, url: unknown): { name: string, url: string } {
+  const n = String(name ?? '').trim()
+  const u = httpsHref(String(url ?? '').trim())
+  if (!n) return { name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL }
+  if (n === DEFAULT_AUTHOR_NAME) return { name: n, url: u || DEFAULT_AUTHOR_URL }
+  return { name: n, url: u }
 }
 
 /** Short (7-char) commit for display; '' when the SHA is unknown (dev builds). */

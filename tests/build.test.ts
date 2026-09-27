@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_AUTHOR_NAME, DEFAULT_AUTHOR_URL, REPO_URL, commitUrl, healthInfo, resolveAuthor, resolveRepoUrl, shortSha } from '~/utils/build'
+import { LANDING_PUBLISHER } from '~/utils/seo'
 
 describe('shortSha', () => {
   it('takes the first 7 chars', () => {
@@ -65,9 +66,11 @@ describe('репозиторий сборки (клон у клиента)', () 
 })
 
 describe('resolveAuthor (#758)', () => {
-  it('по умолчанию — «ИП Шевчик И.С.» со ссылкой на оффер', () => {
-    expect(DEFAULT_AUTHOR_NAME).toBe('ИП Шевчик И.С.')
+  it('по умолчанию — «ИП Шевчик И. С.» со ссылкой на оффер; имя то же, что у издателя лендинга', () => {
+    expect(DEFAULT_AUTHOR_NAME).toBe('ИП Шевчик И. С.')
     expect(DEFAULT_AUTHOR_URL).toBe('https://offer.bx-shef.by/?ref=bank-import')
+    // Две копии строки уже расходились («И.С.» против «И. С.») — поэтому одна.
+    expect(LANDING_PUBLISHER).toBe(DEFAULT_AUTHOR_NAME)
   })
 
   it('пустые значения (так их отдаёт незаданная переменная сборки) — умолчание целиком', () => {
@@ -86,9 +89,31 @@ describe('resolveAuthor (#758)', () => {
     expect(resolveAuthor('ООО Ромашка', '')).toEqual({ name: 'ООО Ромашка', url: '' })
   })
 
-  it('адрес только https: иное в href не попадает', () => {
+  it('без имени свой адрес не берётся: наше имя не ведёт на чужой сайт', () => {
+    expect(resolveAuthor('', 'https://romashka.example.by/'))
+      .toEqual({ name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL })
+  })
+
+  it('наше имя без адреса — с нашей ссылкой; с адресом — с заданной', () => {
+    expect(resolveAuthor(DEFAULT_AUTHOR_NAME, '')).toEqual({ name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL })
+    expect(resolveAuthor(DEFAULT_AUTHOR_NAME, 'https://bx-shef.by/'))
+      .toEqual({ name: DEFAULT_AUTHOR_NAME, url: 'https://bx-shef.by/' })
+  })
+
+  it('адрес только https и без логина: иное в href не попадает', () => {
     expect(resolveAuthor('ООО Ромашка', 'javascript:alert(1)').url).toBe('')
     expect(resolveAuthor('ООО Ромашка', 'http://romashka.example.by').url).toBe('')
-    expect(resolveAuthor('', 'javascript:alert(1)')).toEqual({ name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL })
+    // Валидный адрес, который ведёт на `evil.example`, а не на `romashka.example.by`.
+    expect(resolveAuthor('ООО Ромашка', 'https://romashka.example.by@evil.example/').url).toBe('')
+    expect(resolveAuthor('ООО Ромашка', 'https://').url).toBe('')
+  })
+
+  it('схема в любом регистре — тот же https', () => {
+    expect(resolveAuthor('ООО Ромашка', 'HTTPS://Romashka.Example.by/a').url).toBe('https://romashka.example.by/a')
+  })
+
+  it('число или булево из destr не роняет подвал', () => {
+    // `NUXT_PUBLIC_AUTHOR_NAME=2026` сборка отдаёт числом, а `.trim()` у числа — TypeError.
+    expect(resolveAuthor(2026, true)).toEqual({ name: '2026', url: '' })
   })
 })
