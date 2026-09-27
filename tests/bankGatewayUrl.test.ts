@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeAuthorizeBase, normalizeBankApiBase, sameOrigin } from '../app/utils/bankGatewayUrl'
+import { gatewayOrigin, normalizeAuthorizeBase, normalizeBankApiBase, sameOrigin } from '../app/utils/bankGatewayUrl'
 
 describe('normalizeBankApiBase (origin the BACKEND calls)', () => {
   it('accepts https anywhere and strips trailing slashes', () => {
@@ -92,6 +92,36 @@ describe('normalizeAuthorizeBase (origin the BROWSER opens)', () => {
 
   it('still accepts a normal public bank host with a port', () => {
     expect(normalizeAuthorizeBase('https://apibel.priorbank.by:9345')).toBe('https://apibel.priorbank.by:9345')
+  })
+})
+
+// «Через шлюз» = пригодный адрес backend по `http:` (#770). Одно правило для `/api/ready` и
+// `make doctor` — второй сверяется с этой функцией в tests/prodDoctorGateway.test.ts.
+describe('gatewayOrigin (address goes through the crypto gateway)', () => {
+  it('internal http → the origin, path and query dropped', () => {
+    expect(gatewayOrigin('http://crypto-gw:1080/oauth2/token?x=1')).toBe('http://crypto-gw:1080')
+  })
+
+  // Регистр набранной схемы переживает `normalizeBankApiBase`, а для `URL` и транспорта это тот же
+  // `http:`. Проверка префиксом строки давала здесь «не через шлюз».
+  it('upper-case scheme → still the gateway, canonical origin', () => {
+    expect(gatewayOrigin('HTTP://CRYPTO-GW:1080/')).toBe('http://crypto-gw:1080')
+  })
+
+  it('https → not through the gateway, even to an internal host', () => {
+    expect(gatewayOrigin('https://api.priorbank.by:9344')).toBeNull()
+    expect(gatewayOrigin('https://crypto-gw:1080')).toBeNull()
+  })
+
+  // Нормализация — внутри функции, а не на совести вызывающего: сырой публичный `http://` не
+  // становится целью пробы, даже если его передали мимо `normalizeBankApiBase`.
+  it('public http, junk and empty → null', () => {
+    expect(gatewayOrigin('http://api.priorbank.by:9344')).toBeNull()
+    expect(gatewayOrigin('http://10.attacker.example:1080')).toBeNull()
+    expect(gatewayOrigin('crypto-gw:1080')).toBeNull()
+    expect(gatewayOrigin('')).toBeNull()
+    expect(gatewayOrigin(null)).toBeNull()
+    expect(gatewayOrigin(undefined)).toBeNull()
   })
 })
 

@@ -110,7 +110,8 @@ esac
 # опечатка `http://` вместо `https://` к банку читается как «не примет», а не «нужен шлюз».
 # Правило внутреннего хоста — копия `isInternalHost` (bankGatewayUrl.ts): упрощённое дало бы ложное
 # «приложение не примет» на адресе, который приложение принимает. Расхождение ловит
-# tests/prodDoctorGateway.test.ts — сверкой с `normalizeBankApiBase` на одних и тех же адресах.
+# tests/prodDoctorGateway.test.ts — сверкой с `normalizeBankApiBase` и `gatewayOrigin` (по нему же
+# решает `/api/ready`) на одних и тех же адресах.
 # ⚠ Читаем у работающего процесса, а не в .env: важно, что получил он. Упавший exec (backend
 # лежит) — «не проверить», а не «Приорбанк не настроен». `NODE_OPTIONS` пуст — см. пробы шлюза ниже.
 prior_route=$($DC exec -T -e NODE_OPTIONS= backend node -e '

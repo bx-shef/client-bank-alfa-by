@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateReadiness, gatewayProbeBase, type ReadinessDeps } from '../server/utils/readiness'
+import { normalizeBankApiBase } from '../app/utils/bankGatewayUrl'
 
 const deps = (over: Partial<ReadinessDeps>): ReadinessDeps => ({
   checkDb: async () => true,
@@ -144,5 +145,38 @@ describe('gatewayProbeBase — «шлюз в работе» derived from the two
   // Null must read as «not through the gateway», never as a probe of `null/healthz`.
   it('nulls → not in use', () => {
     expect(gatewayProbeBase(null, null)).toBeNull()
+  })
+
+  // #770: the scheme's case. `normalizeBankApiBase` keeps what the operator typed, and for `URL`
+  // (so for the transport) `HTTP://` is plain `http:`. A prefix check reported «not in use» here
+  // while every Prior call went through the gateway.
+  it('upper-case scheme in the API base → still the gateway, probed at the canonical origin', () => {
+    expect(gatewayProbeBase('HTTP://CRYPTO-GW:1080', `${BANK}/token`)).toBe(GW)
+  })
+
+  it('mixed-case scheme in the token URL → still the gateway', () => {
+    expect(gatewayProbeBase(BANK, 'Http://crypto-gw:1080/token')).toBe(GW)
+  })
+
+  it('upper-case https stays «not in use» — only the scheme decides, not its spelling', () => {
+    expect(gatewayProbeBase('HTTPS://APIBEL.PRIORBANK.BY:9345', 'HTTPS://APIBEL.PRIORBANK.BY:9345/token')).toBeNull()
+  })
+
+  // The route feeds the function through `normalizeBankApiBase`; pin that the upper-case address
+  // really survives it — otherwise the cases above would describe an input that never arrives.
+  it('as the route feeds it: an upper-case gateway address passes normalization and is probed', () => {
+    const api = normalizeBankApiBase('HTTP://CRYPTO-GW:1080/')
+    expect(api).toBe('HTTP://CRYPTO-GW:1080')
+    expect(gatewayProbeBase(api, normalizeBankApiBase(`${BANK}/token`))).toBe(GW)
+  })
+
+  it('an unparseable value reads as «not in use» instead of throwing', () => {
+    expect(gatewayProbeBase('http//crypto-gw', 'not a url')).toBeNull()
+  })
+
+  // The function normalizes on its own: a caller that forgot `normalizeBankApiBase` must not turn a
+  // public `http://` bank address into a probe target (`http://<bank>/healthz`).
+  it('a raw public http address is never probed', () => {
+    expect(gatewayProbeBase('http://apibel.priorbank.by:9345', 'http://apibel.priorbank.by:9345/token')).toBeNull()
   })
 })

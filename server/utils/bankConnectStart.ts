@@ -30,6 +30,7 @@ import { CONNECT_STATE_TTL_MS } from '../../app/utils/bankConnectTtl'
 import type { PriorConnectConfig } from './priorConnectStart'
 import type { BankProviderId } from '../../app/types/statement'
 import { MY_COMPANY_GATE_MESSAGE, type MyCompanyGate } from './myCompanyRequisites'
+import { normalizeBankApiBase } from '../../app/utils/bankGatewayUrl'
 
 /**
  * Отказы из-за настройки СЕРВЕРА приложения — не портала и не нажавшего (#19).
@@ -61,13 +62,23 @@ export function bankConnectConfigFromEnv(provider: BankProviderId): AlfaOAuthCon
   // переменную не задали, отвечал бы «провайдер недоступен» на подключение ПО КЛЮЧУ, к которому
   // адрес возврата отношения не имеет.
   if (!clientId || !tokenUrl) return null
-  // Authorize host = TOKEN_URL minus its trailing `/token`. If it doesn't end in /token we can't
-  // derive the host safely → treat as unconfigured (fail-closed, no broken authorize URL).
-  if (!/\/token\/*$/.test(tokenUrl)) return null
-  const baseUrl = tokenUrl.replace(/\/token\/*$/, '')
-  // Must be an absolute http(s) host — a relative TOKEN_URL like `/token` strips to '' and the
-  // exchange would POST to `/token` on ourselves; fail-closed to null instead.
-  if (!/^https?:\/\/[^/]/.test(baseUrl)) return null
+  // ⚠ Схема проверяется ТЕМ ЖЕ правилом, что у всех банковских адресов (#455), и читается через
+  // `URL`, а не регуляркой (#770). Прежняя регулярка расходилась с продлением
+  // (`bankCredsFromEnv`) по ОДНОЙ И ТОЙ ЖЕ переменной в обе стороны: `HTTPS://…` продление
+  // принимало, а `/bank-key` отвечал «не настроено»; а опечатка `http://` к публичному хосту банка
+  // проходила здесь — и обмен отправил бы бессрочный ключ API вместе с `client_secret` открытым
+  // текстом. `http://` допустим только на внутренний адрес.
+  const checked = normalizeBankApiBase(tokenUrl)
+  // Хост токенов = TOKEN_URL без хвостового `/token` (хвостовые `/` уже сняты). Не оканчивается
+  // на `/token` — хост не вывести, считаем ненастроенным (fail-closed, без битого адреса).
+  // ⚠ Суффикс сравнивается С УЧЁТОМ регистра, в отличие от схемы: путь в адресе чувствителен к
+  // регистру, а обмен собирает адрес заново как `${baseUrl}/token` — `…/TOKEN` ушёл бы на другой
+  // путь, чем задал оператор.
+  if (!checked || !/\/token$/.test(checked)) return null
+  const baseUrl = checked.slice(0, -'/token'.length)
+  // Обязателен хост: `https:///token` разбирается `URL` как хост `token`, а обмен ушёл бы на
+  // `https:///token`; fail-closed.
+  if (!/^https?:\/\/[^/]/i.test(baseUrl)) return null
   const scope = process.env.ALFA_OAUTH_SCOPE?.trim()
   return { baseUrl, clientId, ...(scope ? { scope } : {}) }
 }

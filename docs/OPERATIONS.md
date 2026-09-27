@@ -62,7 +62,7 @@ cd /home/bitrix/bank-import && make gw-stop
 | обновить образы прямо сейчас | `make prod-redeploy` |
 | живой лог / состояние контейнеров | `make logs` / `make ps` |
 | проба хоста Приорбанка | `make prior-probe` |
-| переключить Приор | `make prior-switch TO=direct` / `TO=gateway` |
+| переключить Приор (⚠ не на ВМ Битрикс24 с автообновлением: поднимает `backend`/`worker` мимо оверлея — #764) | `make prior-switch TO=direct` / `TO=gateway` |
 | правда ли `pageRowCount=0` у Альфы значит «все» (#561) | `B24=xxx.bitrix24.by DAY=2026-08-18 make alfa-page-probe` |
 | что API Альфы отдаёт по валютному счёту (#735) | `B24=xxx.bitrix24.by FROM=2026-08-01 TO=2026-08-31 make alfa-currency-probe`; суммы не сошлись — `AMOUNTS=1 …` (вывод не пересылать) |
 | включить обратную связь (#499) | `make feedback-on` — спросит репозиторий-приёмник и токен; серверу клиента — свой репозиторий |
@@ -670,7 +670,7 @@ pnpm prior:test --oidc \
 
 | Значение | Что значит |
 |---|---|
-| `null` | шлюз не используется (`PRIOR_OAUTH_API_BASE` не внутренний http-адрес) |
+| `null` | шлюз не используется: ни `PRIOR_OAUTH_API_BASE`, ни `PRIOR_OAUTH_TOKEN_URL` не внутренний http-адрес (регистр схемы не важен, #770) |
 | `true` | шлюз отвечает на свой `/healthz` |
 | `false` | шлюз не отвечает — Приор стоит |
 

@@ -18,6 +18,8 @@
 // Pure over injected probes (DI) → unit-testable without a real DB/Redis; the route wires
 // the live probes.
 
+import { gatewayOrigin } from '../../app/utils/bankGatewayUrl'
+
 export interface ReadinessChecks {
   /** Postgres reachable (SELECT 1 succeeded). */
   db: boolean
@@ -46,10 +48,11 @@ export interface ReadinessResult {
 /** Which address to probe the crypto gateway at, derived from the two INDEPENDENT Prior
  *  addresses the app actually calls. `null` = the gateway is not in use.
  *
- *  Both inputs must already be through `normalizeBankApiBase`, which accepts `http://` ONLY for
- *  an internal host — so an http address here means exactly one thing: that traffic goes through
- *  the gateway. "In use" is derived from the addresses rather than from a separate flag, because
- *  a flag would drift from reality and reporting reality is the whole point of the field.
+ *  «Through the gateway» is decided by `gatewayOrigin` (app/utils/bankGatewayUrl.ts) — the same
+ *  rule `make doctor` is checked against, so the two cannot drift apart again (#770 was exactly
+ *  that drift: a prefix check here missed `HTTP://…`). "In use" is derived from the addresses rather
+ *  than from a separate flag, because a flag would drift from reality and reporting reality is the
+ *  whole point of the field.
  *
  *  ⚠ BOTH addresses are checked, and that is not belt-and-braces. The documented production shape
  *  is the token endpoint behind the gateway with the resource API still on the bank's public host
@@ -60,13 +63,9 @@ export interface ReadinessResult {
  *  Lives here, not inline in the route, because route bodies carry no tests in this codebase:
  *  inlined, the check above silently reverted to API-base-only would still pass the whole suite. */
 export function gatewayProbeBase(apiBase: string | null, tokenUrl: string | null): string | null {
-  const internal = (v: string | null) => Boolean(v && v.startsWith('http://'))
-  // Probe whichever address is internal; when both are, the API base wins (arbitrary but stable —
-  // in that configuration they are the same gateway anyway). The token URL is a full endpoint
-  // (`…/token`), so it is cut back to its origin; the API base already is one.
-  if (internal(apiBase)) return apiBase
-  if (internal(tokenUrl)) return new URL(tokenUrl!).origin
-  return null
+  // Probe whichever address goes through the gateway; when both do, the API base wins (arbitrary
+  // but stable — in that configuration they are the same gateway anyway).
+  return gatewayOrigin(apiBase) ?? gatewayOrigin(tokenUrl)
 }
 
 export interface ReadinessDeps {
