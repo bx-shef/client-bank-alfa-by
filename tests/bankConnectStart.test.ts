@@ -73,6 +73,14 @@ describe('bankConnectConfigFromEnv', () => {
     expect(bankConnectConfigFromEnv('alfa-by')).toEqual({ baseUrl: 'http://localhost:8273', clientId: 'CID' })
   })
 
+  // Регистр СХЕМЫ не важен, а регистр ПУТИ важен: обмен собирает адрес заново как
+  // `${baseUrl}/token`, и `…/TOKEN` превратился бы в другой путь, чем задал оператор.
+  it('суффикс /TOKEN в другом регистре — отказ, а не молча другой путь', () => {
+    process.env.ALFA_OAUTH_CLIENT_ID = 'CID'
+    process.env.ALFA_OAUTH_TOKEN_URL = 'https://alfa:8273/TOKEN'
+    expect(bankConnectConfigFromEnv('alfa-by')).toBeNull()
+  })
+
   // `URL` разбирает `https:///token` как хост `token`, то есть правило адреса его пропускает;
   // без отдельной проверки хоста обмен ушёл бы на `https:///token`.
   it('адрес без хоста — отказ', () => {

@@ -71,6 +71,9 @@ export function bankConnectConfigFromEnv(provider: BankProviderId): AlfaOAuthCon
   const checked = normalizeBankApiBase(tokenUrl)
   // Хост токенов = TOKEN_URL без хвостового `/token` (хвостовые `/` уже сняты). Не оканчивается
   // на `/token` — хост не вывести, считаем ненастроенным (fail-closed, без битого адреса).
+  // ⚠ Суффикс сравнивается С УЧЁТОМ регистра, в отличие от схемы: путь в адресе чувствителен к
+  // регистру, а обмен собирает адрес заново как `${baseUrl}/token` — `…/TOKEN` ушёл бы на другой
+  // путь, чем задал оператор.
   if (!checked || !/\/token$/.test(checked)) return null
   const baseUrl = checked.slice(0, -'/token'.length)
   // Обязателен хост: `https:///token` разбирается `URL` как хост `token`, а обмен ушёл бы на

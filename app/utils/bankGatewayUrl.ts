@@ -92,9 +92,9 @@ export function normalizeBankApiBase(raw: string | null | undefined): string | n
  *
  * The gateway accepts plain HTTP from us, and `normalizeBankApiBase` admits `http://` only for an
  * internal host — so «through the gateway» is exactly «a usable backend address over `http:`». The
- * value is normalized HERE, so a caller cannot forget to (a raw public `http://` must never become
- * a probe target). Returned as an origin: callers probe the gateway's own root, and the origin also
- * canonicalizes the case.
+ * value is normalized HERE rather than by the caller, so no caller can skip it: a raw public
+ * `http://` must never become a probe target. Returned as an origin: callers probe the gateway's own
+ * root, and the origin also canonicalizes the case.
  *
  * ⚠ The scheme is read through `URL`, never by string prefix (#770): `normalizeBankApiBase` keeps
  * the case the operator typed (`HTTP://crypto-gw:1080`), while for `URL` — and so for the transport
