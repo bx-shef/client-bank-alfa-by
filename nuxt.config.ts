@@ -2,6 +2,7 @@
 // «закрыть от индексации». Копия списка здесь означала бы, что страница может попасть в пререндер,
 // но не в карту сайта (или наоборот), и заметить это можно только случайно.
 import { PRERENDER_ROUTES, SERVICE_ROUTES } from './app/config/routes'
+import { destr } from 'destr'
 import { isLocalMode } from './app/utils/localMode'
 import { resolveMetrikaId } from './app/utils/metrika'
 
@@ -9,9 +10,12 @@ import { resolveMetrikaId } from './app/utils/metrika'
 // заданный (только цифры — защита от опечатки или компрометации ENV в CI) или наш, но наш только
 // вне локального режима. Одна функция на оба места — иначе сниппет и цели разойдутся, как уже
 // разошлись с #701.
+// ⚠ И ОДНО представление значения: переменные разбираются тем же `destr`, которым Nitro кладёт
+// их в конфиг. Без этого одна функция видела бы разные входы: `1e5` здесь строка («15» после
+// отсева нецифр), а в конфиге число 100000; `"1"` в кавычках здесь не включение, а в конфиге — «1».
 const metrikaId = resolveMetrikaId(
-  process.env.NUXT_PUBLIC_METRIKA_ID,
-  isLocalMode(process.env.NUXT_PUBLIC_LOCAL_MODE)
+  destr(process.env.NUXT_PUBLIC_METRIKA_ID),
+  isLocalMode(destr(process.env.NUXT_PUBLIC_LOCAL_MODE))
 )
 if (process.env.NUXT_PUBLIC_METRIKA_ID?.trim() && !metrikaId) {
   console.warn('[nuxt.config] NUXT_PUBLIC_METRIKA_ID после фильтрации пустой — счётчик Яндекс.Метрики не будет вставлен')
@@ -68,7 +72,7 @@ export default defineNuxtConfig({
       // `Dockerfile` выставляет её пустой всякий раз, когда переменная репозитория не задана. Так с
       // #701 (2026-09-13) на проде пропали форма заявок и цели Метрики (замерено 2026-09-27), а у
       // клонов — подпись в подвале. Непустое умолчание здесь запрещает
-      // `tests/publicEnvBuildArgs.test.ts`.
+      // `tests/nuxtConfigEnv.test.ts` — он загружает этот конфиг и проверяет вычисленные значения.
       // ⚠ Значения приходят через `destr`: `1` становится числом, `true` — булевым.
       //
       // Автор в подвале (#758). Пусто ⇒ «ИП Шевчик И. С.» со ссылкой на оффер — см. `resolveAuthor`.

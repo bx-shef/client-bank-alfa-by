@@ -56,6 +56,14 @@ describe('репозиторий сборки (клон у клиента)', () 
       expect(resolveRepoUrl(bad), bad).toBe(REPO_URL)
     }
     expect(resolveRepoUrl(undefined)).toBe(REPO_URL)
+  })
+
+  it('адрес с логином перед хостом ⇒ апстрим: он ведёт на чужой хост', () => {
+    // `https://github.com@evil.example/…` — валидный адрес с хостом `evil.example`; прежняя
+    // регулярка «https, потом хост» его пропускала в подпись «сборка <sha>» на каждом экране.
+    expect(resolveRepoUrl('https://github.com@evil.example/client/app')).toBe(REPO_URL)
+    expect(resolveRepoUrl('https://user:pass@github.com/client/app')).toBe(REPO_URL)
+    expect(resolveRepoUrl('https://github.com/client app')).toBe(REPO_URL)
     expect(commitUrl('abc123')).toBe(`${REPO_URL}/commit/abc123`)
   })
 

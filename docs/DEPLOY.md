@@ -361,6 +361,8 @@ docker run -d --name watchtower --restart unless-stopped \
 | Arg / env | Назначение |
 |---|---|
 | `NUXT_PUBLIC_AUTHOR_NAME` / `NUXT_PUBLIC_AUTHOR_URL` | автор в подвале (пусто — «ИП Шевчик И. С.» → `offer.bx-shef.by`, #758) |
+| `NUXT_PUBLIC_METRIKA_ID` | счётчик Яндекс.Метрики на лендинге (пусто — наш вне локального режима, в локальном — нет; `0` или нецифры — выключен, #758) |
+| `NUXT_PUBLIC_B24_FORM_*` | CRM-форма заявок на лендинге (пусто — наша вне локального режима, в локальном — заглушка, #758) |
 | `DOMAIN` | домен прод-образа (`VIRTUAL_HOST`/`LETSENCRYPT_HOST` для nginx-proxy) |
 | `LETSENCRYPT_EMAIL` | контакт для TLS-сертификата (acme-companion); необязателен |
 

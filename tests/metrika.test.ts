@@ -31,4 +31,10 @@ describe('resolveMetrikaId', () => {
     expect(resolveMetrikaId(' 12-345 ', false)).toBe('12345')
     expect(resolveMetrikaId('off', false)).toBe('')
   })
+
+  it('ноль выключает счётчик, а не вставляет ym(0,…) при молчащих целях', () => {
+    for (const v of ['0', '000', 0]) {
+      expect(resolveMetrikaId(v, false), JSON.stringify(v)).toBe('')
+    }
+  })
 })

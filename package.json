@@ -74,6 +74,7 @@
     "@vueuse/core": "^14.4.0",
     "@vueuse/nuxt": "^14.4.0",
     "bullmq": "^6.3.7",
+    "destr": "^2.0.5",
     "echarts": "^6.1.0",
     "ioredis": "^5.11.1",
     "pdfjs-dist": "^6.3.289",

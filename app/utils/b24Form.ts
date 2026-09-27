@@ -59,6 +59,9 @@ export function resolveB24Form(
   localMode: boolean
 ): B24FormConfig {
   // Values come through `destr`, so `1` is a number: stringify rather than call `.trim()` on it.
+  // ⚠ Stringifying does NOT restore a value destr rewrote: `1e5` arrives as 100000 and `12e345` as
+  // Infinity. A secret that looks like a number must be quoted in the variable (`"12e345"`) —
+  // destr returns the text inside the quotes as is.
   const scriptUrl = String(value.scriptUrl ?? '').trim()
   const formId = String(value.formId ?? '').trim()
   const formSecret = String(value.formSecret ?? '').trim()

@@ -8,6 +8,7 @@
 // away with the variable itself, #757.)
 
 import { resolveOpLogMode } from '../../app/utils/opLogPolicy'
+import { destr } from 'destr'
 import { isLocalMode } from '../../app/utils/localMode'
 import { isPriorRequestTypInvalid } from './priorJwt'
 import { Buffer } from 'node:buffer'
@@ -157,9 +158,11 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
   //     («статика с промо, backend думает, что режим локальный») — ровно тот класс тихой ошибки,
   //     что и забытый флаг. ⚠ Задан, но НЕ распознан как включение — самый опасный случай: значение
   //     есть, оператор думает, что промо скрыты, а `isLocalMode` вернул false (fail-safe в сторону
-  //     показа), и билд ушёл с нашим брендингом. Поведение бэка флаг НЕ меняет (баннеров там нет). ---
+  //     показа), и билд ушёл с нашим брендингом. Поведение бэка флаг НЕ меняет (баннеров там нет).
+  //     ⚠ Значение — через `destr`, как его видит сборка фронта: иначе `"1"` в кавычках или `1.0`
+  //     здесь давали бы предупреждение, а статика при этом была бы локальной. ---
   const localModeRaw = (env.NUXT_PUBLIC_LOCAL_MODE ?? '').trim()
-  if (localModeRaw && !isLocalMode(localModeRaw)) {
+  if (localModeRaw && !isLocalMode(destr(localModeRaw))) {
     warnings.push(`NUXT_PUBLIC_LOCAL_MODE="${localModeRaw}" не распознан как включение — локальный режим НЕ активен, промо/брендинг-баннеры остаются. Чтобы включить, задайте 1/true/yes/on (иначе оставьте пустым).`)
   }
 

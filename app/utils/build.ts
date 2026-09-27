@@ -18,20 +18,25 @@ export const REPO_URL = 'https://github.com/bx-shef/client-bank-alfa-by'
  *
  * ⚠ Проверяем, а не подставляем как есть: значение приходит переменной сборки, попадает в `href`
  * подписи на КАЖДОМ экране, и пустое/кривое дало бы битую ссылку в подвале вместо честной нашей.
- * Требуем `https` и непустой хост; `javascript:` и прочее до `href` не доедет по построению.
+ * Требуем `https`, хост без логина (`httpsHref`) и путь к репозиторию; `javascript:` и прочее до
+ * `href` не доедет по построению. Прежняя регулярка пропускала `https://github.com@чужой.сайт/…`
+ * — адрес, который ведёт на `чужой.сайт`.
  */
-export function resolveRepoUrl(value: string | undefined | null): string {
-  const v = (value ?? '').trim().replace(/\/+$/, '')
-  if (!/^https:\/\/[^\s/]+\/\S+$/.test(v)) return REPO_URL
+export function resolveRepoUrl(value: unknown): string {
+  const v = String(value ?? '').trim().replace(/\/+$/, '')
+  const href = /\s/.test(v) ? '' : httpsHref(v)
+  if (!href || new URL(href).pathname.length < 2) return REPO_URL
   return v
 }
 
 /**
  * Автор в подвале по умолчанию (#758, решение владельца 2026-09-27; прежнее умолчание
  * `bx-shef` / `https://bx-shef.by` снято). Имя — то же, что `LANDING_PUBLISHER` в `seo.ts`: это
- * один и тот же человек, и две копии строки уже успели разойтись («И.С.» против «И. С.»), поэтому
- * `seo.ts` берёт его отсюда. Направление такое, потому что этот модуль без зависимостей и его
- * грузит сервер ради `/api/health`, а `seo.ts` тянет за собой таблицу маршрутов.
+ * один и тот же человек, и эти две копии строки уже успели разойтись («И.С.» против «И. С.»),
+ * поэтому `seo.ts` берёт его отсюда. Направление такое, потому что этот модуль без зависимостей
+ * и его грузит сервер ради `/api/health`, а `seo.ts` тянет за собой таблицу маршрутов.
+ * ⚠ Логотип (`AppLogo.vue`) пишет «Шевчик И.С.» слитно и сюда не привязан: это начертание знака,
+ * а не подпись.
  */
 export const DEFAULT_AUTHOR_NAME = 'ИП Шевчик И. С.'
 export const DEFAULT_AUTHOR_URL = 'https://offer.bx-shef.by/?ref=bank-import'

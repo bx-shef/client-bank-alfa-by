@@ -45,7 +45,7 @@ ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 # Незаданная переменная = пустая строка, и она ПЕРЕКРЫВАЕТ умолчание `nuxt.config.ts`. Поэтому
 # умолчания там пустые, а запасные значения живут в функциях, которые конфиг читают (`resolveAuthor`,
 # `resolveMetrikaId`, `resolveB24Form`, …): так с #701 на проде пропали форма заявок и цели Метрики.
-# Непустое умолчание не пропустит тот же `tests/publicEnvBuildArgs.test.ts`.
+# Непустое умолчание не пропустит `tests/nuxtConfigEnv.test.ts`.
 ARG NUXT_PUBLIC_REPO_URL
 ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 # Код приложения НА ПОРТАЛЕ (#19): тиражное — символьный код Маркета, локальное — `client_id`.
@@ -152,7 +152,7 @@ ENV NUXT_PUBLIC_LOCAL_MODE=$NUXT_PUBLIC_LOCAL_MODE
 # Незаданная переменная = пустая строка, и она ПЕРЕКРЫВАЕТ умолчание `nuxt.config.ts`. Поэтому
 # умолчания там пустые, а запасные значения живут в функциях, которые конфиг читают (`resolveAuthor`,
 # `resolveMetrikaId`, `resolveB24Form`, …): так с #701 на проде пропали форма заявок и цели Метрики.
-# Непустое умолчание не пропустит тот же `tests/publicEnvBuildArgs.test.ts`.
+# Непустое умолчание не пропустит `tests/nuxtConfigEnv.test.ts`.
 ARG NUXT_PUBLIC_REPO_URL
 ENV NUXT_PUBLIC_REPO_URL=$NUXT_PUBLIC_REPO_URL
 # Код приложения НА ПОРТАЛЕ (#19): тиражное — символьный код Маркета, локальное — `client_id`.
