@@ -124,8 +124,11 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
 > 🔴 **`PUBLIC_PAGE_BASIC_AUTH_PASS` под PUBLIC — ОБЯЗАТЕЛЕН.** Без него `operatorAllowed()`
 > считает служебную зону **открытой** (пароль пуст ⇒ вход выключен ⇒ зона распахнута), и под
 > публичным сервером `/queues` и `/api/ops/*` доступны **кому угодно** по `appUrl`.
-> В основном nginx-деплое это прикрывал ещё и `deny`/сеть; в Black Hole nginx нет — единственная
-> защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie).
+> В Black Hole nginx нет, и единственная защита служебной зоны — этот пароль (+ `SESSION_SECRET` для
+> подписи cookie).
+>
+> `make queue-stats` на этом таргете **неприменим**: он заходит в контейнер `redis` через
+> `docker compose`, а здесь нет ни SSH, ни compose. Счётчики очередей — на странице `/queues`.
 >
 > **Enforcement:** `deploy/vibecode-deploy.sh` теперь **fail-closed** — под `ACCESS_POLICY=PUBLIC`
 > отказывается деплоить, если в `ENV_JSON` нет непустого `PUBLIC_PAGE_BASIC_AUTH_PASS` (ловит забытый

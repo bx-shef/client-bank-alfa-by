@@ -98,12 +98,14 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
   }
 
   // --- OAuth app creds: needed for access-token refresh, app.option, and the install-time
-  //     member_id binding (#162). Events are still received and the token is still stored, but
-  //     WITHOUT the member_id→grant verification. So: warning, not error. ---
+  //     member_id binding (#162). Since #757 the binding is the only install authentication, so
+  //     without the creds installs are REFUSED (503). Still a warning, not an error: the VM runbook
+  //     brings the stack up before the local app exists (docs/DEPLOY_BITRIXVM.md), and at that
+  //     stage empty creds are the expected state, not a fault. ---
   const hasClientId = !!(env.B24_CLIENT_ID ?? '').trim()
   const hasClientSecret = !!(env.B24_CLIENT_SECRET ?? '').trim()
   if (!hasClientId || !hasClientSecret) {
-    warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — refresh access-токена, настройка app.option и привязка member_id на установке (#162) работать не будут (приём событий и запись токена — будут, но БЕЗ проверки member_id→грант).')
+    warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — установка приложения будет отклонена (503: её подлинность проверяется только через OAuth, #162/#757), не будут работать и refresh access-токена, и настройка app.option.')
   }
 
   // --- Redis: without it the queue is off and event persistence degrades to the

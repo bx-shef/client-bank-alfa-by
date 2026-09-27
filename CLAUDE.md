@@ -1388,8 +1388,10 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
     сеть/`wrong_client`/нет `member_id` → **503**, fail-closed — установка **не** пишется). Рефреш **ротирует**
     токен ⇒ на успехе храним **возвращённый** грант (accessToken/refreshToken/expiresIn), а не присланный
     (он уже spent). Гейт на `B24_CLIENT_ID/SECRET` в роуте (`events.post.ts`): без них рефреш невозможен в
-    принципе (crm-sync/keep-alive тоже мертвы) ⇒ `bindInstallMember` не прокидывается, установка деградирует к
-    прежней (application_token-only). Транспорт — **осознанное исключение из «всё через jssdk»**: один сырой
+    принципе (crm-sync/keep-alive тоже мертвы) ⇒ `bindInstallMember` не прокидывается, и установка
+    **отклоняется (503)**. ⚠ До #757 она деградировала к доверию первому токену — пока был
+    `B24_APPLICATION_TOKEN`, это было приемлемо; с его снятием привязка — единственная проверка
+    установки, и без неё принимать установку нельзя. Транспорт — **осознанное исключение из «всё через jssdk»**: один сырой
     POST на фиксированный `oauth.bitrix.info/oauth/token/` (SDK-рефреш **выбрасывает** `member_id` из ответа,
     привязка его требует; хост фиксирован → нет SSRF, секреты в теле POST, AbortSignal-таймаут, `withDependencySpan`).
     Работает и на sync-fallback-пути (Redis down) — bind до обеих веток. Чистое ядро (`verifyInstallMember`,

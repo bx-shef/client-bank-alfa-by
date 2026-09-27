@@ -112,6 +112,8 @@ const NOW = 1_000_000
 function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
   return {
     loadStoredToken: vi.fn(async () => APP_TOKEN),
+    // Привязка к гранту по умолчанию проходит и ничего не меняет: без неё установка теперь отказ (#757).
+    bindInstallMember: vi.fn(async () => ({ ok: true as const })),
     enqueue: vi.fn(async () => true),
     enqueueDeletion: vi.fn(async () => true),
     saveCredentials: vi.fn(async () => {}),
@@ -254,12 +256,20 @@ describe('handleEventRequest — primary (enqueue) path', () => {
     expect(bindInstallMember).not.toHaveBeenCalled()
   })
 
-  it('#162: with no bind dep wired (no OAuth creds) install persists unchanged (degraded)', async () => {
-    const deps = makeReqDeps() // bindInstallMember undefined
+  it('#757: без привязки (OAuth-креды не заданы) установка — отказ 503, ничего не пишется', async () => {
+    const deps = makeReqDeps({ bindInstallMember: undefined })
     const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(503)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+
+  it('#757: без привязки удаление по-прежнему проходит — оно сверяется с сохранённым токеном', async () => {
+    const deps = makeReqDeps({ bindInstallMember: undefined })
+    const res = await handleEventRequest(uninstall, deps)
+    expect(res.status).toBe(200)
     expect(res.outcome).toBe('queued')
-    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
-    expect(job.credentials.refreshTokenEnc).toBe('enc(R)') // delivered creds, as before
   })
 
   it('enqueues an unregister job (no credentials) on uninstall', async () => {

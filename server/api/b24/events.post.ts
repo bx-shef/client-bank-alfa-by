@@ -24,8 +24,9 @@ const bankConnectLog = useServerLogger('bank-connect')
 
 export default defineEventHandler(async (event) => {
   // #162: bind the install member_id to the OAuth grant. Needs the app's OAuth creds to refresh; if
-  // they're unset, refresh is impossible anyway (crm-sync/keep-alive are dead too) → binding degrades
-  // off and install behaves as before (application_token-only). Fixed OAuth host → no SSRF.
+  // they're unset the binder is not wired and the handler REFUSES installs (503, #757 — the binding
+  // is the only install authentication left; nothing else works without the creds anyway).
+  // Fixed OAuth host → no SSRF.
   const clientId = process.env.B24_CLIENT_ID?.trim() || ''
   const clientSecret = process.env.B24_CLIENT_SECRET?.trim() || ''
   const bindInstallMember = clientId && clientSecret

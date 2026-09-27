@@ -9,7 +9,7 @@
 // `auth.application_token`. It is first seen on ONAPPINSTALL, alongside OAuth
 // data, and must be persisted (per portal, keyed by member_id). Later events —
 // crucially ONAPPUNINSTALL, which carries no OAuth data — are trusted only when
-// their application_token matches the stored (or env-configured) one. That
+// their application_token matches the stored one (#757 removed the env-configured variant). That
 // constant-time compare is the sole authenticity signal for uninstall.
 //
 // Shape modelled on the bx-synapse backend (a working B24 integration): the wire

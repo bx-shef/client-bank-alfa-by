@@ -1,6 +1,6 @@
 # Наблюдаемость: OpenTelemetry (#78)
 
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-09-27
 
 Глубокая телеметрия backend'а на **OpenTelemetry** (официальный вектор Bitrix24 —
 `bitrix-tools/b24-ai-starter-otel`): трейсы + метрики (+ логи) по OTLP в коллектор →
@@ -80,7 +80,7 @@
 
 ## Чем это дополняет «лёгкую» наблюдаемость
 
-Не заменяет: снапшот-счётчики `GET /api/queues` / `/api/ops/queues`, страница-монитор `/queues`
+Не заменяет: снапшот-счётчики `/api/ops/queues` и `make queue-stats`, страница-монитор `/queues`
 (ECharts), `/api/health` (liveness), `/api/ready` (readiness), пожизненные счётчики портала
 (`metrics_counter`) — остаются. OTel добавляет **историю, трейсы «где падает/тормозит по порталам» и
 метрики латентности REST/джоб**, чего снапшоты не дают.

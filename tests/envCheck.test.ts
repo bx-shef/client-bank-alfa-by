@@ -103,7 +103,8 @@ describe('checkBackendEnv', () => {
   it('warns (not errors) when OAuth client creds are missing', () => {
     const r = checkBackendEnv({ ...GOOD, B24_CLIENT_ID: '', B24_CLIENT_SECRET: '' })
     expect(r.errors).toEqual([])
-    expect(r.warnings.some(w => w.includes('B24_CLIENT_ID'))).toBe(true)
+    // #757: без них установка отклоняется — предупреждение обязано это сказать прямо.
+    expect(r.warnings.some(w => w.includes('B24_CLIENT_ID') && w.includes('установка приложения будет отклонена'))).toBe(true)
   })
 
   it('warns (not errors) when REDIS_URL is missing — queue off, sync fallback', () => {

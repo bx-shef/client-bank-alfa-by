@@ -166,11 +166,11 @@ export interface B24RequestDeps extends B24EventDeps {
   /** Current epoch ms — injected so tests are deterministic. */
   now: () => number
   /**
-   * #162: bind the client-supplied install member_id to the OAuth grant, or reject. Optional —
-   * the route wires it only when OAuth creds (B24_CLIENT_ID/SECRET) are present (without them we
-   * can't refresh at all, so binding degrades off and install behaves as before). Runs on a
-   * `register` action BEFORE enqueue/persist; on success the RETURNED grant (rotated tokens)
-   * replaces the delivered creds; on failure the install is NOT persisted (403/503).
+   * #162: bind the client-supplied install member_id to the OAuth grant, or reject. The route
+   * wires it only when OAuth creds (B24_CLIENT_ID/SECRET) are present; without it an install is
+   * REFUSED with 503 (#757 — it is the only install authentication left). Runs on a `register`
+   * action BEFORE enqueue/persist; on success the RETURNED grant (rotated tokens) replaces the
+   * delivered creds; on failure the install is NOT persisted (403/503).
    */
   bindInstallMember?: (memberId: string, refreshToken: string) => Promise<InstallMemberResult>
 }
@@ -211,11 +211,18 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
   const ts = tsOf(payload)
 
   // #162: bind member_id to the OAuth grant on a first install BEFORE persisting anything. The
-  // delivered member_id is only application_token-verified (an app-level secret); refreshing the
-  // delivered refresh_token proves it belongs to the CLAIMED portal. On success we store the ROTATED
-  // grant (the delivered refresh_token is now spent); on failure we DON'T persist (403 spoof / 503
-  // can't-verify). Only when the dep is wired (OAuth creds present) — else install degrades as before.
-  if (action.type === 'register' && deps.bindInstallMember) {
+  // delivered member_id is only application_token-checked (an app-level secret that every install
+  // of the app receives); refreshing the delivered refresh_token proves it belongs to the CLAIMED
+  // portal. On success we store the ROTATED grant (the delivered refresh_token is now spent); on
+  // failure we DON'T persist (403 spoof / 503 can't-verify).
+  // ⚠ Since #757 the binding is the ONLY thing that authenticates an install (the env
+  // B24_APPLICATION_TOKEN is gone), so without it — OAuth creds not configured — the install is
+  // REFUSED (503) instead of trusting the first token. Nothing else works without the creds anyway:
+  // no token refresh, no crm-sync.
+  if (action.type === 'register') {
+    if (!deps.bindInstallMember) {
+      return { status: 503, body: { error: 'install verification unavailable: OAuth creds not configured' }, outcome: 'none' }
+    }
     const bound = await deps.bindInstallMember(action.memberId, action.credentials.refreshToken ?? '')
     if (!bound.ok) {
       return { status: bound.status ?? 403, body: { error: 'install member verification failed', memberId: action.memberId }, outcome: 'none' }
