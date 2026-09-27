@@ -109,13 +109,9 @@ describe('safeEqual / verifyApplicationToken', () => {
 })
 
 describe('appTokenVerdict', () => {
-  it('bootstraps install with any non-empty token when no env token', () => {
+  it('bootstraps install with any non-empty token (authentication is the OAuth binding, #162)', () => {
     expect(appTokenVerdict({ isInstall: true, incoming: APP_TOKEN })).toBe('accept')
     expect(appTokenVerdict({ isInstall: true, incoming: '' })).toBe('forbidden')
-  })
-  it('enforces the env token on install when configured', () => {
-    expect(appTokenVerdict({ isInstall: true, incoming: APP_TOKEN, envToken: APP_TOKEN })).toBe('accept')
-    expect(appTokenVerdict({ isInstall: true, incoming: 'x', envToken: APP_TOKEN })).toBe('forbidden')
   })
   it('is fail-closed for non-install events with no expected token', () => {
     expect(appTokenVerdict({ isInstall: false, incoming: APP_TOKEN })).toBe('unconfigured')
@@ -123,10 +119,6 @@ describe('appTokenVerdict', () => {
   it('accepts a non-install event matching the stored token', () => {
     expect(appTokenVerdict({ isInstall: false, incoming: APP_TOKEN, storedToken: APP_TOKEN })).toBe('accept')
     expect(appTokenVerdict({ isInstall: false, incoming: 'x', storedToken: APP_TOKEN })).toBe('forbidden')
-  })
-  it('prefers the env token over the stored one', () => {
-    expect(appTokenVerdict({ isInstall: false, incoming: 'env', envToken: 'env', storedToken: 'db' })).toBe('accept')
-    expect(appTokenVerdict({ isInstall: false, incoming: 'db', envToken: 'env', storedToken: 'db' })).toBe('forbidden')
   })
   it('ignores storedToken on install (bootstrap accepts any non-empty token)', () => {
     expect(appTokenVerdict({ isInstall: true, incoming: 'whatever', storedToken: 'db' })).toBe('accept')

@@ -38,8 +38,6 @@ export interface DeletionEntityFields {
  * single writer. `loadStoredToken` is a read used to authenticate an uninstall.
  */
 export interface B24EventDeps {
-  /** application_token configured via env (`B24_APPLICATION_TOKEN`), or '' if unset. */
-  envToken: string
   /** Stored application_token for a portal, or '' if unknown. */
   loadStoredToken: (memberId: string) => Promise<string>
 }
@@ -82,7 +80,7 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     } catch {
       return { status: 400, body: { error: 'malformed ONAPPINSTALL' } }
     }
-    const verdict = appTokenVerdict({ isInstall: true, incoming: event.auth.application_token, envToken: deps.envToken })
+    const verdict = appTokenVerdict({ isInstall: true, incoming: event.auth.application_token })
     if (verdict !== 'accept') return deny(verdict)
     return {
       status: 200,
@@ -102,7 +100,6 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     const verdict = appTokenVerdict({
       isInstall: false,
       incoming: event.auth.application_token,
-      envToken: deps.envToken,
       storedToken
     })
     if (verdict !== 'accept') return deny(verdict)
@@ -116,7 +113,7 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
   }
 
   // CRM deletion events (§9.2) — verify application_token (fail-closed, same as uninstall: no OAuth
-  // in the payload, so authenticity is the stored/env token) and hand the raw entity fields to the
+  // in the payload, so authenticity is the stored token) and hand the raw entity fields to the
   // consumer, which classifies them with the portal's SP config and reconciles the ledger.
   if ((B24_DELETION_EVENTS as readonly string[]).includes((code || '').toUpperCase())) {
     const auth = (payload as { auth?: Record<string, unknown> } | null)?.auth ?? {}
@@ -125,7 +122,6 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     const verdict = appTokenVerdict({
       isInstall: false,
       incoming: String(auth.application_token ?? ''),
-      envToken: deps.envToken,
       storedToken: await deps.loadStoredToken(memberId)
     })
     if (verdict !== 'accept') return deny(verdict)
@@ -170,11 +166,11 @@ export interface B24RequestDeps extends B24EventDeps {
   /** Current epoch ms — injected so tests are deterministic. */
   now: () => number
   /**
-   * #162: bind the client-supplied install member_id to the OAuth grant, or reject. Optional —
-   * the route wires it only when OAuth creds (B24_CLIENT_ID/SECRET) are present (without them we
-   * can't refresh at all, so binding degrades off and install behaves as before). Runs on a
-   * `register` action BEFORE enqueue/persist; on success the RETURNED grant (rotated tokens)
-   * replaces the delivered creds; on failure the install is NOT persisted (403/503).
+   * #162: bind the client-supplied install member_id to the OAuth grant, or reject. The route
+   * wires it only when OAuth creds (B24_CLIENT_ID/SECRET) are present; without it an install is
+   * REFUSED with 503 (#757 — it is the only install authentication left). Runs on a `register`
+   * action BEFORE enqueue/persist; on success the RETURNED grant (rotated tokens) replaces the
+   * delivered creds; on failure the install is NOT persisted (403/503).
    */
   bindInstallMember?: (memberId: string, refreshToken: string) => Promise<InstallMemberResult>
 }
@@ -207,7 +203,7 @@ function tsOf(payload: unknown): string {
  * the install forever). Returns the HTTP result plus how it was applied.
  */
 export async function handleEventRequest(payload: unknown, deps: B24RequestDeps): Promise<B24RequestResult> {
-  const result = await processB24Event(payload, { envToken: deps.envToken, loadStoredToken: deps.loadStoredToken })
+  const result = await processB24Event(payload, { loadStoredToken: deps.loadStoredToken })
   if (result.status !== 200 || !result.action) return { ...result, outcome: 'none' }
 
   const action = result.action
@@ -215,11 +211,18 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
   const ts = tsOf(payload)
 
   // #162: bind member_id to the OAuth grant on a first install BEFORE persisting anything. The
-  // delivered member_id is only application_token-verified (an app-level secret); refreshing the
-  // delivered refresh_token proves it belongs to the CLAIMED portal. On success we store the ROTATED
-  // grant (the delivered refresh_token is now spent); on failure we DON'T persist (403 spoof / 503
-  // can't-verify). Only when the dep is wired (OAuth creds present) — else install degrades as before.
-  if (action.type === 'register' && deps.bindInstallMember) {
+  // delivered member_id is only application_token-checked (an app-level secret that every install
+  // of the app receives); refreshing the delivered refresh_token proves it belongs to the CLAIMED
+  // portal. On success we store the ROTATED grant (the delivered refresh_token is now spent); on
+  // failure we DON'T persist (403 spoof / 503 can't-verify).
+  // ⚠ Since #757 the binding is the ONLY thing that authenticates an install (the env
+  // B24_APPLICATION_TOKEN is gone), so without it — OAuth creds not configured — the install is
+  // REFUSED (503) instead of trusting the first token. Nothing else works without the creds anyway:
+  // no token refresh, no crm-sync.
+  if (action.type === 'register') {
+    if (!deps.bindInstallMember) {
+      return { status: 503, body: { error: 'install verification unavailable: OAuth creds not configured' }, outcome: 'none' }
+    }
     const bound = await deps.bindInstallMember(action.memberId, action.credentials.refreshToken ?? '')
     if (!bound.ok) {
       return { status: bound.status ?? 403, body: { error: 'install member verification failed', memberId: action.memberId }, outcome: 'none' }

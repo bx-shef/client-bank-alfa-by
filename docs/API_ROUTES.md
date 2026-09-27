@@ -1,6 +1,6 @@
 # Наши HTTP-роуты: авторизация и коды
 
-> Last reviewed: 2026-09-17
+> Last reviewed: 2026-09-27
 
 Справочник по **входящим** запросам к нашему backend (`server/api/**`). Не путать с
 [`REST_METHODS.md`](REST_METHODS.md) — там учёт **исходящих** вызовов к Bitrix24.
@@ -17,7 +17,6 @@
 | **F+A** | То же + `profile.ADMIN === true`. Ставится там, где настройка скоуплена на **весь портал** (банк-креды, `app.option`, провижининг). |
 | **S** | Сессия оператора: cookie `cba_sess` (HttpOnly, HMAC-подпись). ⚠ Пустой `PUBLIC_PAGE_BASIC_AUTH_PASS` = «вход выключен», и `operatorAllowed` пропускает **всех**. |
 | **S+C** | Сессия + CSRF-заголовок `X-CBA-Auth`. |
-| **T** | `X-Check-Token` = `B24_APPLICATION_TOKEN`, сверка constant-time. Только заголовком — чтобы токен не оседал в логах. |
 | **AT** | `application_token` в теле события Б24, fail-closed. |
 | **ST** | Подписанный HMAC-`state` (OAuth-callback банка), проверяется **до** любого обращения к банку. |
 | **P** | Публичный. |
@@ -54,7 +53,6 @@
 | POST | `/api/app-rating` | F | нет | 200, 400, 403, 409 | — |
 | GET | `/api/feedback` | P (булев `{enabled}`) | — | 200 | `import` |
 | POST | `/api/feedback` | F | нет | 200, 202 (outbox), 400, 403, 409, 502, 503 | `import` |
-| GET | `/api/queues` | **T** | — | 200, 403 | `deny all` |
 | GET | `/api/ops/queues` | S | — | 200, 401 | — |
 | GET | `/api/ops/bank-health` | S | — | 200, 401, 503 | — |
 | GET | `/api/ops/app-rating` | S | — | 200, 401, 502 | — |

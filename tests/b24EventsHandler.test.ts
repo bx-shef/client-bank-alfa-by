@@ -7,7 +7,6 @@ const APP_TOKEN = '51856fefc120afa4b628cc82d3935cce'
 // The handler now VERIFIES only (reads), never writes — deps are reads only.
 function makeDeps(over: Partial<B24EventDeps> = {}): B24EventDeps {
   return {
-    envToken: '',
     loadStoredToken: vi.fn(async () => ''),
     ...over
   }
@@ -33,7 +32,7 @@ const uninstall = {
 }
 
 describe('processB24Event — install', () => {
-  it('returns 200 with a register action carrying the credentials (bootstrap, no env token)', async () => {
+  it('returns 200 with a register action carrying the credentials (bootstrap)', async () => {
     const res = await processB24Event(install, makeDeps())
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({ ok: true, event: 'ONAPPINSTALL', memberId: 'm1' })
@@ -42,18 +41,6 @@ describe('processB24Event — install', () => {
       memberId: 'm1',
       credentials: expect.objectContaining({ memberId: 'm1', applicationToken: APP_TOKEN, accessToken: 'A', refreshToken: 'R' })
     })
-  })
-
-  it('accepts install when the env token matches', async () => {
-    const res = await processB24Event(install, makeDeps({ envToken: APP_TOKEN }))
-    expect(res.status).toBe(200)
-    expect(res.action?.type).toBe('register')
-  })
-
-  it('returns 403 with no action when the env token mismatches', async () => {
-    const res = await processB24Event(install, makeDeps({ envToken: 'different' }))
-    expect(res.status).toBe(403)
-    expect(res.action).toBeUndefined()
   })
 
   it('returns 400 on a malformed install', async () => {
@@ -69,14 +56,6 @@ describe('processB24Event — install', () => {
     // Empty token → parse fails (auth incomplete) → 400; no action.
     expect(res.status).toBe(400)
     expect(res.action).toBeUndefined()
-  })
-
-  it('never echoes a token in the 403 body', async () => {
-    const res = await processB24Event(install, makeDeps({ envToken: 'secret-env-token' }))
-    expect(res.status).toBe(403)
-    const body = JSON.stringify(res.body)
-    expect(body).not.toContain('secret-env-token')
-    expect(body).not.toContain(APP_TOKEN)
   })
 })
 
@@ -94,7 +73,7 @@ describe('processB24Event — uninstall (always unregisters)', () => {
     expect(res.action).toEqual({ type: 'unregister', memberId: 'm1' })
   })
 
-  it('returns 503 (fail-closed) with no action when no stored or env token', async () => {
+  it('returns 503 (fail-closed) with no action when no stored token', async () => {
     const res = await processB24Event(uninstall, makeDeps())
     expect(res.status).toBe(503)
     expect(res.action).toBeUndefined()
@@ -113,10 +92,12 @@ describe('processB24Event — uninstall (always unregisters)', () => {
     expect(res.action).toBeUndefined()
   })
 
-  it('accepts via env token even when the portal is unknown', async () => {
-    const res = await processB24Event(uninstall, makeDeps({ envToken: APP_TOKEN }))
-    expect(res.status).toBe(200)
-    expect(res.action).toEqual({ type: 'unregister', memberId: 'm1' })
+  it('never echoes a token in the 403 body', async () => {
+    const res = await processB24Event(uninstall, makeDeps({ loadStoredToken: vi.fn(async () => 'secret-stored-token') }))
+    expect(res.status).toBe(403)
+    const body = JSON.stringify(res.body)
+    expect(body).not.toContain('secret-stored-token')
+    expect(body).not.toContain(APP_TOKEN)
   })
 })
 
@@ -130,8 +111,9 @@ describe('processB24Event — other', () => {
 const NOW = 1_000_000
 function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
   return {
-    envToken: '',
     loadStoredToken: vi.fn(async () => APP_TOKEN),
+    // Привязка к гранту по умолчанию проходит и ничего не меняет: без неё установка теперь отказ (#757).
+    bindInstallMember: vi.fn(async () => ({ ok: true as const })),
     enqueue: vi.fn(async () => true),
     enqueueDeletion: vi.fn(async () => true),
     saveCredentials: vi.fn(async () => {}),
@@ -172,7 +154,7 @@ describe('processB24Event — CRM deletion (§9.2)', () => {
   })
 
   it('rejects a deletion with a bad application_token (fail-closed, no action)', async () => {
-    const res = await processB24Event(dealDelete, makeDeps({ envToken: 'different', loadStoredToken: vi.fn(async () => 'different') }))
+    const res = await processB24Event(dealDelete, makeDeps({ loadStoredToken: vi.fn(async () => 'different') }))
     expect(res.status).toBe(403)
     expect(res.action).toBeUndefined()
   })
@@ -274,12 +256,20 @@ describe('handleEventRequest — primary (enqueue) path', () => {
     expect(bindInstallMember).not.toHaveBeenCalled()
   })
 
-  it('#162: with no bind dep wired (no OAuth creds) install persists unchanged (degraded)', async () => {
-    const deps = makeReqDeps() // bindInstallMember undefined
+  it('#757: без привязки (OAuth-креды не заданы) установка — отказ 503, ничего не пишется', async () => {
+    const deps = makeReqDeps({ bindInstallMember: undefined })
     const res = await handleEventRequest(install, deps)
+    expect(res.status).toBe(503)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveCredentials).not.toHaveBeenCalled()
+  })
+
+  it('#757: без привязки удаление по-прежнему проходит — оно сверяется с сохранённым токеном', async () => {
+    const deps = makeReqDeps({ bindInstallMember: undefined })
+    const res = await handleEventRequest(uninstall, deps)
+    expect(res.status).toBe(200)
     expect(res.outcome).toBe('queued')
-    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
-    expect(job.credentials.refreshTokenEnc).toBe('enc(R)') // delivered creds, as before
   })
 
   it('enqueues an unregister job (no credentials) on uninstall', async () => {
@@ -324,12 +314,12 @@ describe('handleEventRequest — primary (enqueue) path', () => {
   })
 
   it('does nothing (outcome none) and never enqueues on a denied event', async () => {
-    const deps = makeReqDeps({ envToken: 'different' })
-    const res = await handleEventRequest(install, deps)
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => 'different') })
+    const res = await handleEventRequest(uninstall, deps)
     expect(res.status).toBe(403)
     expect(res.outcome).toBe('none')
     expect(deps.enqueue).not.toHaveBeenCalled()
-    expect(deps.saveCredentials).not.toHaveBeenCalled()
+    expect(deps.deletePortal).not.toHaveBeenCalled()
   })
 })
 

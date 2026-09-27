@@ -53,10 +53,6 @@ services:
         NUXT_PUBLIC_B24_FORM_SCRIPT_URL: ${NUXT_PUBLIC_B24_FORM_SCRIPT_URL:-}
     environment:
       DATABASE_URL: postgres://app:app@db:5432/app
-      # application_token of the registered B24 app. REQUIRED IN PROD — without it
-      # the first install is trusted on faith (TOFU); the backend logs a WARNING
-      # when it bootstraps. Left optional (`:-`) only for local/dev. See docs/B24_EVENTS.md.
-      B24_APPLICATION_TOKEN: ${B24_APPLICATION_TOKEN:-}
       # 32-byte key (hex/base64) encrypting portal refresh tokens at rest.
       # Required — no default, so secrets are never encrypted with a known key.
       B24_TOKEN_ENC_KEY: ${B24_TOKEN_ENC_KEY:?set B24_TOKEN_ENC_KEY (openssl rand -hex 32)}

@@ -14,7 +14,7 @@ import {
 import { QUEUE_NAMES } from '../server/queue/topology'
 
 // Pure data-shaping for the queue monitor chart: build the live time-series from
-// GET /api/queues snapshots (the chart component only renders). See docs/QUEUES.md.
+// GET /api/ops/queues snapshots (the chart component only renders). See docs/QUEUES.md.
 
 function snap(queues: QueuesSnapshot['queues']): QueuesSnapshot {
   return { enabled: true, queues }

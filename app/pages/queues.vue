@@ -2,8 +2,7 @@
 // Ops page: a live chart of BullMQ queue lengths (QueueMonitor + ECharts).
 //
 // Source is GET /api/ops/queues — gated by the OPERATOR SESSION cookie, so a
-// logged-in employee's browser can read it (unlike /api/queues, which needs the
-// B24_APPLICATION_TOKEN and is nginx-denied). `?preview=1` swaps in a client-side
+// logged-in employee's browser can read it. `?preview=1` swaps in a client-side
 // generator (fabricated numbers in the browser) that does NOT poll the queues —
 // for screenshots / no-backend dev. NB: this is unrelated to the backend
 // DEMO_LOAD_N load, which drives the REAL queues; preview is a pure front-end fake.

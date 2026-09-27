@@ -32,6 +32,25 @@ function dryRun(dir: string, target: string): string[] {
     .split('\n').filter(l => l.includes('docker compose'))
 }
 
+// ⚠ У этих целей `docker compose` — не первое слово строки, а АРГУМЕНТ скрипту: `bash "$t" "$(DC)"`.
+// Подмена `$(DC)` на жёсткий `-f` (хоть в рецепте, хоть целевой переменной над ним) текстовым
+// поиском по рецепту не ловится — замерено мутацией, — поэтому проверка та же: настоящий make -n.
+describe('цели, передающие $(DC) скрипту аргументом, тоже уважают COMPOSE_FILE', () => {
+  const ARG_TARGETS = ['queue-stats', 'feedback-on']
+
+  it.each(ARG_TARGETS)('%s: без COMPOSE_FILE — прежний -f docker-compose.prod.yml', (t) => {
+    const lines = dryRun(stackDir('DOMAIN=x.by\n'), t)
+    expect(lines.length).toBeGreaterThan(0)
+    expect(lines.some(l => l.includes('"docker compose -f docker-compose.prod.yml"'))).toBe(true)
+  })
+
+  it.each(ARG_TARGETS)('%s: с COMPOSE_FILE — без -f, оверлей не теряется', (t) => {
+    const lines = dryRun(stackDir('COMPOSE_FILE=docker-compose.prod.yml:docker-compose.bitrixvm.yml\n'), t)
+    expect(lines.length).toBeGreaterThan(0)
+    for (const l of lines) expect(l).not.toMatch(/docker compose -f /)
+  })
+})
+
 describe('прод-цели собирают стек файлами из COMPOSE_FILE, если он задан', () => {
   const TARGETS = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 'ps', 'gw-stop', 'gw-start', 'reap-off']
 

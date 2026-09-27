@@ -7,8 +7,7 @@ const GOOD: NodeJS.ProcessEnv = {
   DATABASE_URL: 'postgres://app:pw@db:5432/app',
   REDIS_URL: 'redis://redis:6379',
   B24_CLIENT_ID: 'local.abc',
-  B24_CLIENT_SECRET: 'shh',
-  B24_APPLICATION_TOKEN: ''
+  B24_CLIENT_SECRET: 'shh'
 }
 
 describe('checkBackendEnv', () => {
@@ -96,18 +95,6 @@ describe('checkBackendEnv', () => {
     expect(r.errors).toEqual([])
   })
 
-  it('errors on a placeholder B24_APPLICATION_TOKEN (case-insensitive)', () => {
-    for (const v of ['CHANGE_ME', 'changeme', 'xxx', 'placeholder']) {
-      const r = checkBackendEnv({ ...GOOD, B24_APPLICATION_TOKEN: v })
-      expect(r.errors.some(e => e.includes('B24_APPLICATION_TOKEN'))).toBe(true)
-    }
-  })
-
-  it('accepts an empty B24_APPLICATION_TOKEN (multi-tenant bootstrap) and a real-looking value', () => {
-    expect(checkBackendEnv({ ...GOOD, B24_APPLICATION_TOKEN: '' }).errors).toEqual([])
-    expect(checkBackendEnv({ ...GOOD, B24_APPLICATION_TOKEN: '51856fefc120afa4b628cc82d3935cce' }).errors).toEqual([])
-  })
-
   it('errors when DATABASE_URL is missing', () => {
     const r = checkBackendEnv({ ...GOOD, DATABASE_URL: '' })
     expect(r.errors.some(e => e.includes('DATABASE_URL'))).toBe(true)
@@ -116,7 +103,8 @@ describe('checkBackendEnv', () => {
   it('warns (not errors) when OAuth client creds are missing', () => {
     const r = checkBackendEnv({ ...GOOD, B24_CLIENT_ID: '', B24_CLIENT_SECRET: '' })
     expect(r.errors).toEqual([])
-    expect(r.warnings.some(w => w.includes('B24_CLIENT_ID'))).toBe(true)
+    // #757: без них установка отклоняется — предупреждение обязано это сказать прямо.
+    expect(r.warnings.some(w => w.includes('B24_CLIENT_ID') && w.includes('установка приложения будет отклонена'))).toBe(true)
   })
 
   it('warns (not errors) when REDIS_URL is missing — queue off, sync fallback', () => {

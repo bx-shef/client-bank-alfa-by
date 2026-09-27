@@ -3,7 +3,8 @@
 // follow-up). Unlike /api/health (pure process liveness),
 // readiness actually PROBES the backend's hard dependencies so `docker compose ps` / an
 // uptime monitor / an on-call responder can tell "process up" from "app actually able to
-// work". Booleans only — NO secrets, NO queue depth (that's the token-gated /api/queues).
+// work". Booleans only — NO secrets, NO queue depth (that's the session-gated
+// /api/ops/queues and `make queue-stats`).
 //
 // Semantics:
 //   - db: Postgres reachable (a `SELECT 1`). HARD requirement — DATABASE_URL is mandatory

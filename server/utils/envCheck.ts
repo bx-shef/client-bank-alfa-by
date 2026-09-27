@@ -2,11 +2,10 @@
 // plugin (server/plugins/envCheck.ts) logs the result at boot so a misconfigured
 // deploy is obvious immediately, instead of failing deep inside a request handler.
 //
-// Motivated by two real prod traps:
-//   - B24_TOKEN_ENC_KEY the wrong length (e.g. a truncated paste → 31 bytes) →
-//     refresh-token encryption throws and the install can't store its token;
-//   - B24_APPLICATION_TOKEN left as a placeholder (CHANGE_ME) → the real token
-//     from ONAPPINSTALL never matches it → the verdict is 403 → install rejected.
+// Motivated by a real prod trap: B24_TOKEN_ENC_KEY the wrong length (e.g. a truncated
+// paste → 31 bytes) → refresh-token encryption throws and the install can't store its token.
+// (The other historical trap — a CHANGE_ME B24_APPLICATION_TOKEN rejecting every install — went
+// away with the variable itself, #757.)
 
 import { resolveOpLogMode } from '../../app/utils/opLogPolicy'
 import { isLocalMode } from '../../app/utils/localMode'
@@ -26,11 +25,6 @@ function sameKeyBytes(a: string, b: string): boolean {
     return false
   }
 }
-
-/** Obvious non-secret placeholders that must never be a live application_token. */
-const PLACEHOLDER_TOKENS = new Set([
-  'change_me', 'changeme', 'change-me', 'xxx', 'placeholder', 'todo', 'your-token', 'your_token', 'secret'
-])
 
 /** Injected probes for the few checks that need more than `env`. Keeps `checkBackendEnv` pure. */
 export interface EnvProbes {
@@ -85,13 +79,6 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
     }
   }
 
-  // --- Application token: optional (per-portal bootstrap), but a placeholder
-  //     value silently breaks every install (real token != placeholder → 403). ---
-  const appTok = (env.B24_APPLICATION_TOKEN ?? '').trim()
-  if (appTok && PLACEHOLDER_TOKENS.has(appTok.toLowerCase())) {
-    errors.push(`B24_APPLICATION_TOKEN="${appTok}" похоже на плейсхолдер — реальный токен из ONAPPINSTALL с ним не совпадёт, и установка получит 403. Оставьте переменную пустой (мультитенант-bootstrap) или впишите реальный shared-guard токен.`)
-  }
-
   // --- Postgres: the token store needs it. ---
   if (!(env.DATABASE_URL ?? '').trim()) {
     errors.push('DATABASE_URL не задан — хранилище токенов портала недоступно.')
@@ -111,12 +98,14 @@ export function checkBackendEnv(env: NodeJS.ProcessEnv = process.env, probes: En
   }
 
   // --- OAuth app creds: needed for access-token refresh, app.option, and the install-time
-  //     member_id binding (#162). Events are still received and the token is still stored, but
-  //     WITHOUT the member_id→grant verification. So: warning, not error. ---
+  //     member_id binding (#162). Since #757 the binding is the only install authentication, so
+  //     without the creds installs are REFUSED (503). Still a warning, not an error: the VM runbook
+  //     brings the stack up before the local app exists (docs/DEPLOY_BITRIXVM.md), and at that
+  //     stage empty creds are the expected state, not a fault. ---
   const hasClientId = !!(env.B24_CLIENT_ID ?? '').trim()
   const hasClientSecret = !!(env.B24_CLIENT_SECRET ?? '').trim()
   if (!hasClientId || !hasClientSecret) {
-    warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — refresh access-токена, настройка app.option и привязка member_id на установке (#162) работать не будут (приём событий и запись токена — будут, но БЕЗ проверки member_id→грант).')
+    warnings.push('B24_CLIENT_ID/B24_CLIENT_SECRET не заданы — установка приложения будет отклонена (503: её подлинность проверяется только через OAuth, #162/#757), не будут работать и refresh access-токена, и настройка app.option.')
   }
 
   // --- Redis: without it the queue is off and event persistence degrades to the

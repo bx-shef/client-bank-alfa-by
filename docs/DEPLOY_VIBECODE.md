@@ -1,6 +1,6 @@
 # Деплой в Битрикс24 Вайбкод Black Hole (альтернативный таргет)
 
-> Last reviewed: 2026-09-26
+> Last reviewed: 2026-09-27
 
 Как выгрузить это приложение в **Битрикс24 Vibecode Black Hole** — закрытый Bitrix-Cloud VM,
 управляемый по REST (без SSH), приложение слушает `:3000` и отдаётся по HTTPS
@@ -117,26 +117,26 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='app'" | grep -q
   "PUBLIC_PAGE_BASIC_AUTH_PASS": "<пароль оператора — ОБЯЗАТЕЛЬНО под PUBLIC>",
   "SECURITY_HEADERS_ENABLED": "1",
   "NUXT_PUBLIC_SITE_URL": "https://app-XXXX.vibecode.bitrix24.tech",
-  "NUXT_PUBLIC_B24_APP_CODE": "<код приложения на портале>",
-  "B24_APPLICATION_TOKEN": ""
+  "NUXT_PUBLIC_B24_APP_CODE": "<код приложения на портале>"
 }
 ```
 
 > 🔴 **`PUBLIC_PAGE_BASIC_AUTH_PASS` под PUBLIC — ОБЯЗАТЕЛЕН.** Без него `operatorAllowed()`
 > считает служебную зону **открытой** (пароль пуст ⇒ вход выключен ⇒ зона распахнута), и под
 > публичным сервером `/queues` и `/api/ops/*` доступны **кому угодно** по `appUrl`.
-> В основном nginx-деплое это прикрывал ещё и `deny`/сеть; в Black Hole nginx нет — единственная
-> защита служебной зоны — этот пароль (+ `SESSION_SECRET` для подписи cookie). Диагностический
-> `/api/queues` **fail-closed** app-гардом (`B24_APPLICATION_TOKEN`
-> пуст ⇒ 403), его PUBLIC не открывает — а вот операторскую зону открывает.
+> В Black Hole nginx нет, и единственная защита служебной зоны — этот пароль (+ `SESSION_SECRET` для
+> подписи cookie).
+>
+> `make queue-stats` на этом таргете **неприменим**: он заходит в контейнер `redis` через
+> `docker compose`, а здесь нет ни SSH, ни compose. Счётчики очередей — на странице `/queues`.
 >
 > **Enforcement:** `deploy/vibecode-deploy.sh` теперь **fail-closed** — под `ACCESS_POLICY=PUBLIC`
 > отказывается деплоить, если в `ENV_JSON` нет непустого `PUBLIC_PAGE_BASIC_AUTH_PASS` (ловит забытый
 > секрет до выката, а не после). Рантайм дополнительно логирует предупреждение (`session.ts`).
 
-`B24_APPLICATION_TOKEN` — **пустой**: он приходит в `ONAPPINSTALL` и пишется в **БД** (per-portal,
-write-once) — `process.env` остаётся пустым, это нормально (подпись событий проверяется по
-сохранённому в БД токену). `NUXT_PUBLIC_SITE_URL` подставь после первого деплоя (когда узнаешь
+Токена приложения в окружении **нет** (#757): `application_token` приходит в `ONAPPINSTALL` и
+пишется в **БД** (per-portal, write-once), подпись следующих событий проверяется по нему, а саму
+установку — привязка к OAuth-гранту (#162). `NUXT_PUBLIC_SITE_URL` подставь после первого деплоя (когда узнаешь
 `appUrl`) и передеплой — из него строится абсолютный URL хендлера событий `/api/b24/events`
 (иначе `/install` откажется биндить).
 
