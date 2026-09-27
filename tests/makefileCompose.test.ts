@@ -186,17 +186,22 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(run(syntax.dir, syntax.home, 'deploy-install').stdout).toContain('не годится: не разбирается')
     const cut = cronHome()
     withSrc(cut.dir, '#!/bin/sh\necho half\n')
-    expect(run(cut.dir, cut.home, 'deploy-install').stdout)
-      .toContain('не годится: обрезан — последней строкой должна быть «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»')
+    // Лекарство названо: чинить файл в репозитории. Дописать метку в ./src руками значило бы
+    // поставить обрезанный скрипт и потом упереться в `git pull --ff-only` у self-update.
+    const out = run(cut.dir, cut.home, 'deploy-install').stdout
+    expect(out).toContain('не годится: обрезан (нет последней строки «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»)')
+    expect(out).toContain('Чинить файл в репозитории, затем make self-update; ./src руками не править')
   })
 
-  it('deploy-install: установлен тот же негодный скрипт — так и сказано, а не «работает прежний»', () => {
+  // Одинаковый с отвергнутым установленный скрипт не обязательно «не работает»: обрезанный перед
+  // веткой отката продолжает выкатывать — без проверки здоровья и отката. Это и сказано.
+  it('deploy-install: установлен такой же негодный скрипт — названа цена и что делать', () => {
     const { dir, home } = cronHome()
     writeFileSync(join(home, 'bin', 'bank-app-deploy'), '')
     withSrc(dir, '')
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
-    expect(r.stdout).toContain('установлен ТОТ ЖЕ скрипт — автообновление сейчас не работает')
+    expect(r.stdout).toContain('установлен такой же скрипт, с тем же дефектом: выкаты могут идти без проверки здоровья и отката. До исправной копии — make deploy-pause')
     expect(r.stdout).not.toContain('остаётся установленный')
   })
 
@@ -243,7 +248,7 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('не годится')
     expect(r.stdout).not.toContain('остаётся установленный')
-    expect(r.stdout).not.toContain('ТОТ ЖЕ')
+    expect(r.stdout).not.toContain('такой же скрипт')
   })
 
   it('deploy-install оставляет прежний скрипт копией с отметкой времени и называет её', () => {

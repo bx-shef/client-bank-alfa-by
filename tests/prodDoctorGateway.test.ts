@@ -114,6 +114,15 @@ describe('шлюза нет или он остановлен — вердикт 
     expect(out).toContain('API_BASE — через шлюз crypto-gw:1080')
   })
 
+  it.each([
+    [GW, '', 'API_BASE — через шлюз crypto-gw:1080, TOKEN_URL — не задан'],
+    ['', `${GW}/token`, 'API_BASE — не задан, TOKEN_URL — через шлюз crypto-gw:1080']
+  ])('шлюза нет, а адрес один и через шлюз (%s | %s) — названы ОБЕ причины: gw-start половинчатость не лечит', (api, token, routes) => {
+    const { out } = doctor({ FAKE_API: api, FAKE_TOKEN: token })
+    expect(out).toMatch(/ПЛОХО.*Приорбанк настроен через шлюз, а crypto-gw не развёрнут/)
+    expect(out).toMatch(new RegExp(`ПЛОХО.*Приорбанк настроен наполовину \\(${routes.replace(/\./g, '\\.')}\\)`))
+  })
+
   it('шлюз остановлен, а backend на него настроен — авария, и состояние названо', () => {
     const { out } = doctor({ FAKE_GW: 'exited', FAKE_API: GW, FAKE_TOKEN: `${GW}/token` })
     expect(out).toMatch(/ПЛОХО.*а crypto-gw остановлен \(exited\)/)

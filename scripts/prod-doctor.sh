@@ -231,7 +231,10 @@ else
     warn "crypto-gw $gw_word; нужен ли он, не проверить — backend не ответил на exec"
   else
     case "$prior_api|$prior_token" in
-      'gw '*|*'|gw '*) bad "Приорбанк настроен через шлюз, а crypto-gw $gw_word — Приорбанк стоит ($prior_routes)" ;;
+      'gw '*|*'|gw '*)
+        bad "Приорбанк настроен через шлюз, а crypto-gw $gw_word — Приорбанк стоит ($prior_routes)"
+        # Половинчатая настройка — отдельная причина: `make gw-start` её не лечит.
+        prior_address_problem || true ;;
       'none|none') ok "crypto-gw не используется — Приорбанк на этом сервере не настроен" ;;
       *) prior_address_problem || ok "crypto-gw не используется — Приорбанк напрямую (${prior_api#direct })" ;;
     esac
