@@ -15,10 +15,11 @@
 // (`-e NODE_OPTIONS=`), строка попадает в разбор — ровно так на живом образе сломались бы и
 // вердикт по адресам, и пробы самого шлюза.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { normalizeBankApiBase } from '../app/utils/bankGatewayUrl'
 
 const DOCTOR = resolve(__dirname, '../scripts/prod-doctor.sh')
 
@@ -152,6 +153,12 @@ describe('шлюза нет или он остановлен — вердикт 
     expect(out).not.toContain('через шлюз')
   })
 
+  it('опрос через шлюз, а адрес токенов не разбирается — первым назван шлюз: без него не работает ничего', () => {
+    const { out } = doctor({ FAKE_API: GW, FAKE_TOKEN: 'api.priorbank.by:9344' })
+    expect(out).toMatch(/ПЛОХО.*Приорбанк настроен через шлюз, а crypto-gw не развёрнут/)
+    expect(out).toContain('TOKEN_URL — приложение не примет')
+  })
+
   it('внутренний адрес по IP — шлюз; публичный домен, похожий на частную сеть, — нет', () => {
     expect(doctor({ FAKE_API: 'http://10.0.0.5:1080', FAKE_TOKEN: DIRECT_TOKEN }).out)
       .toMatch(/ПЛОХО.*через шлюз, а crypto-gw не развёрнут/)
@@ -187,5 +194,42 @@ describe('шлюз запущен — проверяется сам шлюз', (
     expect(out).toContain('неразрешённый путь отбивается шлюзом')
     expect(out).not.toContain('crypto-gw не используется')
     expect(out).not.toContain('Приорбанк настроен через шлюз, а crypto-gw')
+  })
+})
+
+// Доктор разбирает адрес своей копией правила приложения (`isInternalHost` внутри
+// `normalizeBankApiBase`): упрощённая копия давала «приложение не примет» на адресе, который
+// приложение принимает, — и оператор чинил бы исправный адрес вместо остановленного шлюза.
+// Сверяем обе стороны на одних и тех же адресах: разойдутся — тест покраснеет.
+describe('разбор адреса у доктора совпадает с приложением', () => {
+  const script = readFileSync(DOCTOR, 'utf8')
+  const js = script.slice(script.indexOf('backend node -e \'\n') + 'backend node -e \'\n'.length, script.indexOf('\' 2>/dev/null) || prior_route=""'))
+  const route = (v: string) => spawnSync('node', ['-e', js], {
+    env: { ...process.env, PRIOR_OAUTH_API_BASE: v, PRIOR_OAUTH_TOKEN_URL: '' }, encoding: 'utf8'
+  }).stdout.split('|')[0]
+
+  it.each([
+    'https://api.priorbank.by:9344', 'http://crypto-gw:1080', 'HTTP://CRYPTO-GW:1080/', ' http://crypto-gw:1080 ',
+    'http://localhost:1080', 'http://localhost.:1080', 'http://127.0.0.1:1080', 'http://0.0.0.0:1080',
+    'http://10.0.0.5:1080', 'http://172.16.0.1', 'http://172.32.0.1', 'http://192.168.1.2', 'http://169.254.10.5:1080',
+    'http://[::1]:1080', 'http://[fd00::5]:1080', 'http://[fe80::1]:1080', 'http://[::ffff:10.0.0.1]:1080',
+    'http://10.attacker.example:1080', 'http://api.priorbank.by:9344', 'http://8.8.8.8', 'http://[2001:db8::1]',
+    'api.priorbank.by:9344', 'ftp://crypto-gw', '"https://api.priorbank.by:9344"'
+  ])('%s', (v) => {
+    const doc = route(v)
+    const app = normalizeBankApiBase(v)
+    if (app === null) expect(doc, 'приложение не примет — доктор обязан сказать то же').toBe('bad')
+    else if (new URL(app).protocol === 'http:') expect(doc).toMatch(/^gw /)
+    else expect(doc).toMatch(/^direct /)
+  })
+
+  it('фрагмент разбора найден в скрипте — иначе сверять было бы нечего', () => {
+    expect(js).toContain('process.env.PRIOR_OAUTH_API_BASE')
+    expect(js).toContain('const internal')
+  })
+
+  it('пустое значение — «не задан», и приложение тоже его не принимает', () => {
+    expect(route('')).toBe('none')
+    expect(normalizeBankApiBase('')).toBeNull()
   })
 })

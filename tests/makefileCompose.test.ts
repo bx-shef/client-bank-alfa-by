@@ -1,8 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync as mkdtempRaw, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+// Временные каталоги файла убираются после прогона: иначе каждый запуск оставлял бы в /tmp
+// десятки каталогов с подставными docker/flock.
+const temps: string[] = []
+const mkdtempSync = (prefix: string) => {
+  const d = mkdtempRaw(prefix)
+  temps.push(d)
+  return d
+}
+afterAll(() => {
+  for (const d of temps) rmSync(d, { recursive: true, force: true })
+})
 
 // Операторские цели на ВМ Битрикс24 (docs/DEPLOY_BITRIXVM.md).
 //
@@ -142,6 +154,26 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('NEW ignore=')
   })
 
+  it('deploy-install: скрипт не разбирается — не ставит, работающий остаётся на месте', () => {
+    const { dir, home } = cronHome()
+    const src = join(dir, 'src', 'deploy', 'bitrixvm')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\nif then\n')
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('не разбирается — не ставлю')
+    expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "RUN')
+  })
+
+  it('deploy-install оставляет прежний скрипт копией', () => {
+    const { dir, home } = cronHome()
+    const src = join(dir, 'src', 'deploy', 'bitrixvm')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho NEW\n')
+    expect(run(dir, home, 'deploy-install').status).toBe(0)
+    expect(readFileSync(join(home, 'bin', 'bank-app-deploy.bak'), 'utf8')).toContain('echo "RUN')
+  })
+
   it('deploy-install: новый скрипт упал — make сообщает отказом, а не «установлен» и успехом', () => {
     const { dir, home } = cronHome()
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
@@ -235,6 +267,16 @@ describe('на ВМ с автообновлением prod-pull/prod-redeploy о
     expect(r.stdout).not.toContain('жду')
   })
 
+  it('каталог есть и в HOME, и рядом со стеком — берётся домашний, как у целей deploy-*', () => {
+    const { call, calls, deploy } = vm('home')
+    // Рядом со стеком — второй, никогда не запускавшийся (без замка): выбери его — замка бы не было.
+    const sibling = join(deploy, '..', '..', 'bank-app-deploy')
+    mkdirSync(sibling, { recursive: true })
+    writeFileSync(join(sibling, 'deploy.env'), '')
+    expect(call('prod-up').status).toBe(0)
+    expect(calls()).toContain(`flock -w 900 ${deploy}/state/deploy.lock docker compose -f docker-compose.prod.yml up -d`)
+  })
+
   it('prod-up, когда скрипт ещё не запускался (замка нет) — без замка и без его создания', () => {
     const { call, calls, deploy } = vm('sibling', false, false)
     expect(call('prod-up').status).toBe(0)
@@ -242,14 +284,33 @@ describe('на ВМ с автообновлением prod-pull/prod-redeploy о
     expect(existsSync(join(deploy, 'state', 'deploy.lock'))).toBe(false)
   })
 
-  // Поведение замка проверено на prod-up выше; здесь — что ни один ручной подъём стека его не
-  // обходит. Исключения названы: шлюз не несёт образов приложения, а prod-redeploy на такой ВМ
-  // отказывает раньше.
-  it('каждый ручной up -d стека идёт через замок — кроме названных исключений', () => {
+  // Поведение замка проверено на prod-up выше; здесь — что ни одна цель Makefile, поднимающая стек,
+  // его не обходит. Исключения названы: шлюз не несёт образов приложения, а prod-redeploy на такой
+  // ВМ отказывает раньше. ⚠ Охват — только Makefile: скрипты, которые поднимают стек сами
+  // (`prior-switch-host.sh`), сюда не попадают — это отдельная задача (#764).
+  it('каждая цель Makefile, поднимающая стек, идёт через замок — кроме названных исключений', () => {
     const ups = MAKEFILE.split('\n').filter(l => l.startsWith('\t') && l.includes('$(DC) up -d'))
     expect(ups.filter(l => !l.includes('$(DEPLOY_LOCKED)')).map(l => l.trim()))
       .toEqual(['$(DC) up -d && \\', '@$(DC) up -d crypto-gw \\'])
     expect(ups.filter(l => l.includes('$(DEPLOY_LOCKED)')).length).toBe(3)
+  })
+
+  it('prod-down: под замком, и без паузы предупреждает, что выкат поднимет стек снова', () => {
+    const { call, calls, deploy } = vm('home')
+    const r = call('prod-down')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('автообновление не на паузе')
+    expect(calls()).toContain(`flock -w 900 ${deploy}/state/deploy.lock docker compose -f docker-compose.prod.yml down`)
+    writeFileSync(join(deploy, 'state', 'paused'), '')
+    expect(call('prod-down').stdout).not.toContain('не на паузе')
+  })
+
+  it('prod-down без автообновления — прежняя команда, молча', () => {
+    const { call, calls } = vm('none')
+    const r = call('prod-down')
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain('автообновление')
+    expect(calls()).toEqual(['docker compose -f docker-compose.prod.yml down'])
   })
 
   it('prod-up при идущем прогоне — говорит, что ждёт, и всё равно идёт под замком', () => {

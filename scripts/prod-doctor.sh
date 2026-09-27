@@ -163,17 +163,25 @@ else
   # `HTTP://` равен `http://`, а не разобранный адрес приложение не примет. Открытый `http://`
   # приложение пускает только на внутренний хост — это и есть шлюз; на публичный он не годится, и
   # опечатка `http://` вместо `https://` к банку читается как «не примет», а не «нужен шлюз».
-  # Правило внутреннего хоста упрощено против `isInternalHost` (bankGatewayUrl.ts): имя сервиса
-  # docker без точки, localhost, loopback и частные IPv4 — для диагностики этого хватает.
+  # Правило внутреннего хоста — копия `isInternalHost` (bankGatewayUrl.ts): упрощённое дало бы ложное
+  # «приложение не примет» на адресе, который приложение принимает. Расхождение ловит
+  # tests/prodDoctorGateway.test.ts — сверкой с `normalizeBankApiBase` на одних и тех же адресах.
   # ⚠ Читаем у работающего процесса, а не в .env: важно, что получил он. Упавший exec (backend
   # лежит) — «не проверить», а не «Приорбанк не настроен». `NODE_OPTIONS` пуст — см. пробы выше.
   prior_route=$($DC exec -T -e NODE_OPTIONS= backend node -e '
-const internal = h => {
-  if (h === "localhost" || h === "[::1]") return true
+const internal = host => {
+  const h = host.toLowerCase().replace(/\.$/, "")
+  if (h === "localhost") return true
+  if (h.startsWith("[") && h.endsWith("]")) {
+    const v6 = h.slice(1, -1)
+    return v6 === "::1" || v6 === "::" || v6.startsWith("::ffff:")
+      || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)
+  }
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
   if (m) {
     const a = +m[1], b = +m[2]
-    return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)
+    return a === 127 || a === 0 || a === 10 || (a === 192 && b === 168)
+      || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)
   }
   return !h.includes(".") && !h.includes(":")
 }

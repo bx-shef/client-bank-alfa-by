@@ -48,7 +48,7 @@ FIND_AUTODEPLOY = ad=""; for d in "$(CRON_DEPLOY)" "$(abspath $(CURDIR)/../bank-
 # запусти make root — и чужой каталог состояния получил бы файл, в который скрипт не сможет писать.
 # Использование: `$(DEPLOY_LOCKED) "$$@" <команда>` — без автообновления "$$@" пуст.
 DEPLOY_LOCKED = $(FIND_AUTODEPLOY); if [ -n "$$ad" ] && [ -e "$$ad/state/deploy.lock" ]; then \
-	  flock -n "$$ad/state/deploy.lock" true || echo "[make] идёт прогон автообновления — жду его окончания"; \
+	  flock -n "$$ad/state/deploy.lock" true || echo "[make] идёт прогон автообновления — жду его окончания (до 15 минут; не дождусь — повторите команду)"; \
 	  set -- flock -w 900 "$$ad/state/deploy.lock"; else set --; fi;
 
 ## Запустить / обновить app-контейнер
@@ -56,8 +56,14 @@ prod-up:
 	@$(DEPLOY_LOCKED) "$$@" $(DC) up -d
 
 ## Остановить стек
+#
+# ⚠ На ВМ с автообновлением остановка держится только до следующего выката — он поднимет стек
+# снова. Для обслуживания сперва `make deploy-pause`; без паузы цель об этом предупреждает. Под
+# замком — иначе откат идущего выката поднял бы стек сразу после остановки.
 prod-down:
-	$(DC) down
+	@$(FIND_AUTODEPLOY); if [ -n "$$ad" ] && [ ! -e "$$ad/state/paused" ]; then \
+	   echo "[make] ⚠ автообновление не на паузе — следующий выкат поднимет стек снова; для обслуживания сперва make deploy-pause"; fi
+	@$(DEPLOY_LOCKED) "$$@" $(DC) down
 
 # ⚠ На ВМ с автообновлением по git (есть `deploy.env`, docs/DEPLOY_BITRIXVM.md, шаг 6) две цели
 # ниже ОТКАЗЫВАЮТ: они тянут `:latest` ИЗ РЕЕСТРА, а CI публикует его на каждом мёрже — в том числе
@@ -303,7 +309,7 @@ NO_AUTODEPLOY = echo "[make] автообновление не настроен�
 # ⚠ Код выхода — скрипта, а не `tee`: у конвейера он последней команды, и упавший прогон
 # отчитывался бы успехом. `pipefail` в `sh` не везде, поэтому код уносит файл.
 # Использование: `$(call DEPLOY_RUN,<доп. переменные окружения>)`.
-DEPLOY_RUN = ( rc=$$(mktemp) && { $(1) BANK_APP_DEPLOY_LOCK_WAIT=900 \
+DEPLOY_RUN = ( rc=$$(mktemp) || exit 1; { $(1) BANK_APP_DEPLOY_LOCK_WAIT=900 \
 	     BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
 	     "$$HOME/bin/bank-app-deploy" 2>&1; echo $$? > "$$rc"; } | tee -a "$(CRON_DEPLOY)/deploy.log"; \
 	     code=$$(cat "$$rc"); rm -f "$$rc"; exit "$$code" )
@@ -333,13 +339,17 @@ deploy-now:
 # установленная в `~/bin`. Прогон сразу после установки — обычный тик, паузу он соблюдает: в начале
 # тика новый скрипт возвращает локальный `:latest` на развёрнутую версию (#766), и ждать расписания
 # незачем.
+# ⚠ Ставится только разбираемый скрипт, а прежний остаётся копией: его каждые пять минут запускает
+# cron, и битый файл из неудачного слияния остановил бы и выкаты, и сверку `:latest` — молча.
 deploy-install:
 	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
-	   s="./$(SRC_DIR)/deploy/bitrixvm/git-poll-deploy.sh"; \
+	   s="./$(SRC_DIR)/deploy/bitrixvm/git-poll-deploy.sh"; b="$$HOME/bin/bank-app-deploy"; \
 	   if [ ! -r "$$s" ]; then echo "[make] нет $$s — сперва make self-update (docs/DEPLOY_BITRIXVM.md, шаг 1b)"; exit 1; fi; \
+	   if ! bash -n "$$s"; then echo "[make] $$s не разбирается — не ставлю, работает прежний"; exit 1; fi; \
 	   mkdir -p "$$HOME/bin" "$(CRON_DEPLOY)/state" \
-	   && install -m 755 "$$s" "$$HOME/bin/bank-app-deploy" \
-	   && echo "[make] скрипт автообновления установлен из $$s" \
+	   && { [ ! -e "$$b" ] || cp "$$b" "$$b.bak"; } \
+	   && install -m 755 "$$s" "$$b" \
+	   && echo "[make] скрипт автообновления установлен из $$s (прежний — $$b.bak)" \
 	   && $(call DEPLOY_RUN,); \
 	 else $(NO_AUTODEPLOY); fi
 

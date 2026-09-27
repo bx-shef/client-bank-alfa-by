@@ -180,6 +180,13 @@ describe('выкат и откат: :latest идёт за тем, что раб�
     expect(r.deployed).toBeNull()
   })
 
+  it('git вернул не sha — отказ, а не выкат по огрызку', () => {
+    const r = deploy({ FAKE_SHA: 'short' })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('неожиданный ответ git ls-remote')
+    expect(r.log.filter(l => l.startsWith('pull') || l.startsWith('compose'))).toEqual([])
+  })
+
   it('откат сам не удался — :latest не трогаем: что сейчас работает, неизвестно', () => {
     const r = deploy({ FAKE_HEALTHY: '0', FAKE_ROLLBACK_COMPOSE_RC: '1' })
     expect(r.code).toBe(1)
