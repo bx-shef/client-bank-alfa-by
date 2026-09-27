@@ -64,7 +64,7 @@ cd /home/bitrix/bank-import && make gw-stop
 | проба хоста Приорбанка | `make prior-probe` |
 | переключить Приор | `make prior-switch TO=direct` / `TO=gateway` |
 | правда ли `pageRowCount=0` у Альфы значит «все» (#561) | `B24=xxx.bitrix24.by DAY=2026-08-18 make alfa-page-probe` |
-| включить обратную связь (#499) | `make feedback-on` (серверу клиента — свой репозиторий: `REPO=bx-shef/client-bank-feedback-имя make feedback-on`) |
+| включить обратную связь (#499) | `make feedback-on` — спросит репозиторий-приёмник и токен; серверу клиента — свой репозиторий |
 
 ⚠ **Порталов на сервере больше одного ⇒ адрес портала ОБЯЗАТЕЛЕН** (`B24=xxx.bitrix24.by`, перед
 `make`). Без него проба брала бы счёт Альфы того портала, чей токен обновлялся последним, а какой

@@ -1,57 +1,61 @@
 #!/usr/bin/env bash
-# Включить канал обратной связи на сервере (#499): записать в ./.env репозиторий-приёмник и токен —
-# ТОЛЬКО после того, как проверено, что с ними канал действительно работает.
+# Enable the feedback channel on a server (#499): write the receiving repository and the token
+# into ./.env — ONLY after checking that the channel actually works with them.
 #
-# ⚠ Проверки до записи — несущая часть, а не вежливость. Канал fail-closed: без переменных виджет
-# скрыт, и это видно. С НЕВЕРНЫМИ переменными канал выглядит включённым: виджет появляется,
-# сотрудник жмёт 👎, GitHub отвечает 4xx — а outbox считает такой отказ окончательным, и отзыв
-# теряется молча (`handleFeedbackPostJob`). Поэтому до записи проверяется ровно то, на чём он
-# ломается:
-#   1. токен принят и видит репозиторий;
-#   2. репозиторий ПРИВАТНЫЙ — в отзывы уходят назначение платежа, контрагент, суммы, а по галке
-#      файл выписки целиком;
-#   3. токен может ЗАВОДИТЬ задачи — настоящей задачей, которую скрипт тут же закрывает. Права
-#      токена иначе не узнать: чтение репозитория проходит и у токена без права записи.
+# ⚠ The checks before writing are the point, not politeness. The channel is fail-closed: with no
+# variables the widget is hidden, and that is visible. With WRONG variables the channel looks
+# enabled: the widget shows up, every employee report ends in «Не удалось отправить отзыв», and
+# the program's own reports (the worker files them without looking at the result) are lost
+# without a trace. So before writing we check exactly what breaks it:
+#   1. the token is accepted and sees the repository;
+#   2. the repository is PRIVATE (not public, not `internal`) and not archived — reports carry the
+#      payment purpose, the counterparty, sums and, when the employee ticks the box, the whole
+#      statement file;
+#   3. the token can CREATE issues — with a real issue that is closed right away. There is no
+#      other way to learn a token's rights: reading the repository works without write access.
+# After the Makefile recreates the containers, `--verify` repeats the GitHub check from INSIDE
+# both of them: the host reaching api.github.com proves nothing about the containers.
 #
-# ⚠ Токен — только fine-grained (`github_pat_…`). Классический `ghp_…` выпускается на весь аккаунт,
-# а лежит он в `.env` сервера, который ходит в интернет: радиус утечки обязан быть одним приватным
-# репозиторием (docs/FEEDBACK.md). Что у fine-grained токена доступ ровно к одному репозиторию,
-# отсюда не проверить — это на совести выпускающего; проверяется то, что проверяемо.
+# ⚠ Fine-grained tokens only (`github_pat_…`). A classic `ghp_…` token covers the whole account,
+# and it would live in the .env of a server that talks to the internet: the blast radius must be
+# one private repository (docs/FEEDBACK.md). That a fine-grained token is limited to ONE
+# repository cannot be checked from here — that is on whoever issues it.
 #
-# ⚠ Токен вводится с клавиатуры: аргумент и переменная перед make оседают в истории оболочки, а
-# аргумент ещё и виден в `ps`. В `curl` он тоже не уходит аргументом — заголовок идёт конфигом через
-# stdin (`-K -`), как в prod-alfa-page-probe.sh: аргументы видны любому процессу через
-# /proc/<pid>/cmdline.
+# ⚠ The repository name and the token are typed at the keyboard: an argument or a variable
+# before make ends up in the shell history, and an argument is also visible in `ps`. curl gets the
+# token as a header through a config on stdin (`-K -`), never as an argument — arguments of any
+# process are readable through /proc/<pid>/cmdline.
 #
-# ⚠ Серверу КЛИЕНТА — свой репозиторий-приёмник и свой токен. Право писать задачи у GitHub
-# включает право их читать, и общий токен на чужом сервере читал бы отзывы всех остальных.
+# ⚠ The name of the receiving repository is not in this file on purpose: this repository is
+# public, and the real name stays out of it (docs/FEEDBACK.md).
 #
-# Использование (из каталога со стеком; обычно через `make feedback-on`):
-#   bash prod-feedback-on.sh                              # репозиторий bx-shef/client-bank-feedback
-#   REPO=bx-shef/client-bank-feedback-x bash prod-feedback-on.sh
-#   bash prod-feedback-on.sh --verify "docker compose"    # после перезапуска: дошло ли до контейнеров
+# ⚠ A CLIENT's server needs its own receiving repository and its own token: a token that can
+# create issues can also read them, so a shared token on someone else's server would read every
+# other client's reports.
+#
+# Usage (from the stack directory; normally through `make feedback-on`):
+#   bash prod-feedback-on.sh                              # asks for the repository and the token
+#   bash prod-feedback-on.sh --verify "docker compose"    # after the restart: did it reach the containers
 
 set -u
 
-DEFAULT_REPO="bx-shef/client-bank-feedback"
+# ── Pure functions (tests/prodFeedbackOn.test.ts loads them with a sed range) ──────────────────
 
-# ── Чистые функции (их грузит tests/prodFeedbackOn.test.ts через sed-вырезку) ──────────────────
-
-# Тот же разбор `.env`, что у `env-value` в Makefile и `envv` в prod-alfa-page-probe.sh: снимает
-# `export`, хвостовой комментарий и обрамляющие кавычки, берёт ПЕРВОЕ вхождение.
-envv() {
-  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=//p" ./.env 2>/dev/null \
-    | head -1 \
-    | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]][[:space:]]*#.*$//" -e "s/[[:space:]]*$//" \
-          -e "s/^\"\(.*\)\"$/\1/" -e "s/^'\(.*\)'$/\1/"
+# Strip CR and surrounding whitespace: pasting from a phone brings them, and neither a repository
+# name nor a token ever contains them.
+trim() {
+  local s="${1//$'\r'/}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
 }
 
-# Вид «владелец/репозиторий» из символов, которые GitHub допускает в именах.
-# ⚠ `..` отвергается отдельно: имя уходит в путь запроса, а curl схлопывает `/../` САМ, до отправки,
-# то есть токен ушёл бы на другой адрес API.
-# ⚠ Сверка — `[[ =~ ]]`, а НЕ grep: grep построчный, и значение с переводом строки проходило бы
-# проверку своей первой строкой. А имя уходит и в конфиг curl, и в .env — там перевод строки
-# начинает новую директиву (второй `url`, куда уехал бы тот же заголовок с токеном).
+# `owner/repository` from the characters GitHub allows in names.
+# ⚠ `..` is rejected separately: the name goes into the request path, and curl collapses `/../`
+# ITSELF before sending, so the token would go to another API address.
+# ⚠ Matched with `[[ =~ ]]`, NOT grep: grep works line by line, and a value with a newline would
+# pass on its first line. The name goes into the curl config and into .env, where a newline starts
+# a new directive (a second `url` receiving the same token header).
 valid_repo() {
   local LC_ALL=C r="${1:-}"
   [[ "$r" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
@@ -59,10 +63,10 @@ valid_repo() {
   return 0
 }
 
-# Вид токена: fine | classic | bad.
-# ⚠ Алфавит проверяется ЯВНО, а не только префикс: токен уходит в строку конфига curl и в `.env`,
-# и кавычка или перевод строки внутри значения меняли бы смысл обоих файлов. Сверка — `[[ =~ ]]`
-# по той же причине, что в valid_repo: grep пропустил бы перевод строки.
+# Token kind: fine | classic | bad.
+# ⚠ The alphabet is checked EXPLICITLY, not just the prefix: the token goes into a curl config line
+# and into .env, and a quote or a newline inside it would change the meaning of both. `[[ =~ ]]`
+# for the same reason as in valid_repo.
 token_kind() {
   local LC_ALL=C t="${1:-}"
   [[ "$t" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'bad'; return; }
@@ -73,23 +77,30 @@ token_kind() {
   esac
 }
 
-# Ответ на GET /repos/<repo> → ok | public | unauthorized | forbidden | notfound | unreachable | unexpected.
-# ⚠ `ok` — только при ЯВНОМ `"private":true`. Нечитаемое тело не повод считать репозиторий
-# приватным: цена ошибки в эту сторону — финансовые данные клиентов в публичных задачах.
-# ⚠ Берётся ПЕРВОЕ вхождение поля, а не любое: своё `"private"` есть и во вложенных объектах
-# (`template_repository`, `parent`, `source`), и у публичного репозитория, созданного из
-# приватного шаблона, подстрока `"private":true` в ответе есть. Верхнеуровневое поле GitHub
-# отдаёт раньше вложенных объектов, а в `owner`, который идёт перед ним, такого поля нет.
+# GET /repos/<repo> →
+#   ok | public | internal | archived | unauthorized | forbidden | notfound | unreachable | unexpected.
+# ⚠ `ok` only for an EXPLICIT `"private":true`. An unreadable body is no reason to call the
+# repository private: the price of that mistake is clients' financial data in public issues.
+# ⚠ The FIRST occurrence of each field is taken, not any: nested objects (`template_repository`,
+# `parent`, `source`) carry their own copies, and a public repository created from a private
+# template does contain `"private":true`. GitHub sends the top-level fields before the nested
+# objects, and `owner`, which precedes them, has none of these fields.
+# ⚠ `internal` repositories report `"private":true` too, yet every member of the enterprise reads
+# them — hence the separate `visibility` check.
 repo_verdict() {
-  local code="${1:-}" first
-  first="$(printf '%s' "${2:-}" | tr -d ' \n\t\r' | grep -o '"private":[a-z]*' | head -1)"
+  local code="${1:-}" flat priv vis arch
+  flat="$(printf '%s' "${2:-}" | tr -d ' \n\t\r')"
+  priv="$(printf '%s' "$flat" | grep -o '"private":[a-z]*' | head -1)"
+  vis="$(printf '%s' "$flat" | grep -o '"visibility":"[a-z]*"' | head -1)"
+  arch="$(printf '%s' "$flat" | grep -o '"archived":[a-z]*' | head -1)"
   case "$code" in
     200)
-      case "$first" in
-        '"private":true')  printf 'ok' ;;
-        '"private":false') printf 'public' ;;
-        *)                 printf 'unexpected' ;;
-      esac ;;
+      if   [ "$priv" = '"private":false' ];           then printf 'public'
+      elif [ "$priv" != '"private":true' ];           then printf 'unexpected'
+      elif [ "$vis" = '"visibility":"internal"' ];    then printf 'internal'
+      elif [ "$arch" = '"archived":true' ];           then printf 'archived'
+      else printf 'ok'
+      fi ;;
     401) printf 'unauthorized' ;;
     403) printf 'forbidden' ;;
     404) printf 'notfound' ;;
@@ -98,7 +109,7 @@ repo_verdict() {
   esac
 }
 
-# Ответ на POST /repos/<repo>/issues → ok | noperm | disabled | notfound | unreachable | unexpected.
+# POST /repos/<repo>/issues → ok | noperm | disabled | notfound | unreachable | unexpected.
 issue_verdict() {
   case "${1:-}" in
     201) printf 'ok' ;;
@@ -110,20 +121,17 @@ issue_verdict() {
   esac
 }
 
-# Номер задачи из тела ответа GitHub (первое поле `"number"`).
+# Issue number from a GitHub response body (the first `"number"` field).
 issue_number() {
   printf '%s' "${1:-}" | tr -d ' \n\t\r' | grep -o '"number":[0-9][0-9]*' | head -1 | cut -d: -f2
 }
 
-# Тело проверочной задачи. Домен в текст — только из безопасного алфавита: он приходит из `.env`,
-# а попадает внутрь JSON.
+# Body of the test issue. Constant on purpose: nothing from .env goes into it.
 issue_json() {
-  local host="${1:-}"
-  [[ "$host" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || host="сервер без DOMAIN в .env"
-  printf '{"title":"Проверка канала обратной связи (make feedback-on)","body":"Задача заведена командой make feedback-on на %s при включении канала и сразу закрыта: так проверяется, что токен может заводить задачи. Делать ничего не нужно."}' "$host"
+  printf '{"title":"Проверка канала обратной связи (make feedback-on)","body":"Задача заведена командой make feedback-on при включении канала и сразу закрыта: так проверяется, что токен может заводить задачи. Делать ничего не нужно."}'
 }
 
-# Конфиг curl для одного запроса к GitHub. Токен живёт только в заголовке Authorization.
+# curl config for one GitHub request. The token lives only in the Authorization header.
 gh_config() {
   local method="$1" path="$2" token="$3" out="$4" data="${5:-}"
   printf 'url = "https://api.github.com%s"\n' "$path"
@@ -140,58 +148,93 @@ gh_config() {
   printf 'silent\nshow-error\nmax-time = 20\n'
 }
 
-# Заменить в .env обе переменные канала: старые строки убрать, новые дописать в конец.
-# ⚠ Через временный файл рядом и `mv`: оборванная посреди записи `sed -i` оставила бы .env без
-# половины строк, а без него стек не поднимется вовсе.
+# Replace both channel variables in .env: drop the old lines, append the new ones.
+# ⚠ Through a temporary file next to it and `mv`: an interrupted `sed -i` could leave .env without
+# half of its lines, and without it the stack does not start at all.
+# ⚠ The OWNER is copied from the old file: run as root, a bitrix-owned .env would otherwise become
+# root-only, and everything running as bitrix (make, the cron autodeploy) would lose it. The mode
+# is always 600 — the file now holds one more secret, so it is never inherited wider.
+# ⚠ The temporary file is published in ENV_TMP so the EXIT trap removes it if we are interrupted:
+# it holds the new token.
+ENV_TMP=""
 rewrite_env() {
   local f="$1" repo="$2" token="$3" tmp
   tmp="$(mktemp "${f}.XXXXXX")" || return 1
+  ENV_TMP="$tmp"
   if ! sed -E '/^[[:space:]]*(export[[:space:]]+)?GITHUB_FEEDBACK_(TOKEN|REPO)[[:space:]]*=/d' "$f" > "$tmp"; then
-    rm -f "$tmp"; return 1
+    rm -f "$tmp"; ENV_TMP=""; return 1
   fi
-  # ⚠ Последняя строка без перевода строки склеилась бы с первой добавленной.
+  # ⚠ A last line without a newline would be glued to the first appended one.
   if [ -s "$tmp" ] && [ -n "$(tail -c1 "$tmp")" ]; then printf '\n' >> "$tmp"; fi
   printf 'GITHUB_FEEDBACK_REPO=%s\nGITHUB_FEEDBACK_TOKEN=%s\n' "$repo" "$token" >> "$tmp"
-  chmod --reference="$f" "$tmp" 2>/dev/null || chmod 600 "$tmp"
-  mv "$tmp" "$f"
-}
-
-# ── Проверка после перезапуска: дошло ли до контейнеров ─────────────────────────────────────────
-# ⚠ Проверяются ОБА: backend принимает отзывы сотрудников, worker заводит задачи от программы.
-# Включённый наполовину канал снаружи выглядит включённым.
-verify() {
-  local dc="${1:-docker compose}" out="" i tries="${VERIFY_TRIES:-30}" ok=""
-  printf '\n── Проверка: дошло ли до контейнеров ──\n'
-  for i in $(seq 1 "$tries"); do
-    out="$($dc exec -T backend node -e \
-      "fetch('http://127.0.0.1:3000/api/feedback').then(r=>r.text()).then(t=>process.stdout.write(t)).catch(()=>process.exit(1))" \
-      2>/dev/null)"
-    [ -n "$out" ] && break
-    sleep 2
-  done
-  case "$(printf '%s' "$out" | tr -d ' \n\t\r')" in
-    *'"enabled":true'*)  echo "  ✓ backend: канал включён — виджет 👍/👎 появится на экранах приложения" ;;
-    *'"enabled":false'*) echo "  ✗ backend: канал ВЫКЛЮЧЕН — переменные до контейнера не дошли"; return 1 ;;
-    *)                   echo "  ✗ backend не ответил за минуту — смотрите make ps и make logs"; return 1 ;;
-  esac
-  # ⚠ Повтор и здесь: воркер пересоздаётся той же командой и может ещё подниматься.
-  for i in $(seq 1 "$tries"); do
-    if $dc exec -T worker sh -c '[ -n "$GITHUB_FEEDBACK_TOKEN" ] && [ -n "$GITHUB_FEEDBACK_REPO" ]' 2>/dev/null; then
-      ok=1; break
-    fi
-    sleep 2
-  done
-  if [ -n "$ok" ]; then
-    echo "  ✓ worker: переменные на месте — отзывы программы тоже заведутся"
-  else
-    echo "  ✗ worker: переменных нет — отзывы программы не заведутся"; return 1
+  chown --reference="$f" "$tmp" 2>/dev/null \
+    || echo "  ⚠ не удалось сохранить владельца .env — файл теперь принадлежит $(id -un); проверьте права" >&2
+  if ! chmod 600 "$tmp" || ! mv "$tmp" "$f"; then
+    rm -f "$tmp"; ENV_TMP=""; return 1
   fi
-  echo
-  echo "Дальше: откройте «Загрузить выписку» в портале — виджет 👍/👎 должен быть виден; нажмите 👍,"
-  echo "и в репозитории-приёмнике появится задача."
+  ENV_TMP=""
 }
 
-# ── Дальше — ввод-вывод ─────────────────────────────────────────────────────────────────────────
+# Code run by `node -e` INSIDE a container. The token stays in the container's environment: the
+# code refers to process.env and never contains the value, so it is in no argv.
+# ⚠ The output is searched for the PROBE line, never taken as a whole: the image preloads
+# /app/otel.instrument.mjs through NODE_OPTIONS, and that prints its own banner to stdout on every
+# start — «any output» would read as «the backend answered» while it is still starting.
+# ⚠ Both requests are time-bounded: a backend that accepts the connection and never answers would
+# otherwise hang the whole command without a word.
+PROBE_JS="const s=AbortSignal.timeout(8000),e=process.env,tok=e.GITHUB_FEEDBACK_TOKEN||'',repo=e.GITHUB_FEEDBACK_REPO||'';
+const h={Authorization:'Bearer '+tok,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'client-bank-alfa-feedback'};
+Promise.all([
+fetch('http://127.0.0.1:3000/api/feedback',{signal:s}).then(r=>r.text()).catch(()=>''),
+tok&&repo?fetch('https://api.github.com/repos/'+repo,{headers:h,signal:s}).then(r=>String(r.status)).catch(()=>'000'):Promise.resolve('-')
+]).then(([f,g])=>process.stdout.write('\nPROBE env='+(tok&&repo?'ok':'missing')+' github='+g+' feedback='+f.replace(/\s/g,'')+'\n'));"
+
+# One field of a PROBE line: probe_field "<line>" github → 200.
+probe_field() {
+  printf '%s\n' "${1:-}" | tr ' ' '\n' | sed -n "s/^$2=//p" | head -1
+}
+
+# ── Check after the restart: did it reach the containers ────────────────────────────────────────
+# ⚠ BOTH are checked: the backend takes employee reports, the worker files the program's. A
+# half-enabled channel looks enabled from the outside.
+verify() {
+  local dc="${1:-docker compose}" svc out line i tries="${VERIFY_TRIES:-30}" rc=0 env gh fb
+  printf '\n── Проверка: дошло ли до контейнеров ──\n'
+  for svc in backend worker; do
+    line=""
+    for i in $(seq 1 "$tries"); do
+      out="$($dc exec -T "$svc" node -e "$PROBE_JS" 2>/dev/null)"
+      line="$(printf '%s\n' "$out" | grep '^PROBE ' | tail -1)"
+      # The container is up when its own HTTP server answers: until then the process is starting.
+      [ -n "$(probe_field "$line" feedback)" ] && break
+      sleep 2
+    done
+    env="$(probe_field "$line" env)"; gh="$(probe_field "$line" github)"; fb="$(probe_field "$line" feedback)"
+    if [ -z "$fb" ]; then
+      echo "  ✗ $svc не ответил — смотрите make ps и make logs"; rc=1; continue
+    fi
+    if [ "$env" != "ok" ]; then
+      echo "  ✗ $svc: переменных канала нет — до контейнера они не дошли"; rc=1; continue
+    fi
+    if [ "$svc" = backend ]; then
+      case "$fb" in
+        *'"enabled":true'*) ;;
+        *) echo "  ✗ backend: канал выключен — переменные до контейнера не дошли"; rc=1; continue ;;
+      esac
+    fi
+    if [ "$gh" != "200" ]; then
+      echo "  ✗ $svc: GitHub из контейнера ответил ${gh:-нет ответа} (000 — нет связи) — отзывы из него не уйдут"
+      rc=1; continue
+    fi
+    echo "  ✓ $svc: канал включён, GitHub из контейнера отвечает"
+  done
+  [ "$rc" -eq 0 ] || return 1
+  echo
+  echo "Дальше: откройте настройки приложения в портале — над кнопками «Сохранить»/«Отмена» будет"
+  echo "виджет 👍/👎. Нажмите 👍, и в репозитории-приёмнике появится задача."
+}
+
+# ── Input and output from here on ──────────────────────────────────────────────────────────────
 
 if [ "${1:-}" = "--verify" ]; then
   verify "${2:-docker compose}"
@@ -200,31 +243,26 @@ fi
 
 [ -f ./.env ] || { echo "✗ ./.env не найден — запускайте из каталога со стеком"; exit 1; }
 
-REPO="${REPO:-$DEFAULT_REPO}"
-valid_repo "$REPO" || { echo "✗ REPO «$REPO» — нужен вид владелец/репозиторий"; exit 2; }
+# ⚠ Without a terminal the token would have to come through a pipe or a file — the history again.
+[ -t 0 ] || { echo "✗ репозиторий и токен вводятся с клавиатуры — запустите команду в терминале"; exit 2; }
 
-# ⚠ Сервер клиента узнаётся по копии КЛИЕНТСКОГО репозитория рядом со стеком (docs/DEPLOY_BITRIXVM.md,
-# шаг 1b). Общий репозиторий-приёмник туда нельзя: токен с правом писать задачи читает их все, то
-# есть отзывы остальных клиентов оказались бы на чужом сервере.
-if [ -d ./src/.git ] && [ "$REPO" = "$DEFAULT_REPO" ]; then
-  echo "✗ это сервер клиента — ему нужен СВОЙ приватный репозиторий-приёмник и свой токен:"
-  echo "  токен с правом писать задачи читает их все, включая отзывы остальных клиентов."
-  echo "  Заведите отдельный репозиторий и задайте его перед make:"
-  echo "    REPO=$DEFAULT_REPO-имя make feedback-on"
-  exit 2
+# ⚠ A client's server is recognised by the copy of the CLIENT repository next to the stack
+# (docs/DEPLOY_BITRIXVM.md, step 1b).
+if [ -d ./src/.git ]; then
+  echo "⚠ Это сервер клиента: нужен ОТДЕЛЬНЫЙ приватный репозиторий-приёмник под этого клиента"
+  echo "  и токен только на него. Общий токен читал бы отзывы остальных клиентов."
+  echo
 fi
 
-# ⚠ Без терминала токен пришлось бы подать через пайп или файл, то есть снова через историю.
-[ -t 0 ] || { echo "✗ токен вводится с клавиатуры — запустите команду в терминале"; exit 2; }
+printf 'Репозиторий-приёмник (владелец/имя): '
+IFS= read -r REPO
+REPO="$(trim "$REPO")"
+valid_repo "$REPO" || { echo "✗ нужен вид владелец/имя: латиница, цифры, «-», «_», «.»"; exit 2; }
 
-echo "Репозиторий-приёмник: $REPO"
 printf 'Токен GitHub (fine-grained, ввод не отображается): '
 IFS= read -r -s TOKEN
 echo
-# Вставка с телефона приносит `\r` и пробелы по краям — внутри токена их не бывает.
-TOKEN="${TOKEN//$'\r'/}"
-TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
-TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
+TOKEN="$(trim "$TOKEN")"
 
 case "$(token_kind "$TOKEN")" in
   fine) ;;
@@ -237,14 +275,15 @@ case "$(token_kind "$TOKEN")" in
     exit 2 ;;
 esac
 
-BODY_FILE="$(mktemp /tmp/feedback-on-body.XXXXXX)"
-CURL_ERR="$(mktemp /tmp/feedback-on-err.XXXXXX)"
-DATA_FILE="$(mktemp /tmp/feedback-on-data.XXXXXX)"
-cleanup() { rm -f "$BODY_FILE" "$CURL_ERR" "$DATA_FILE"; }
+BODY_FILE="$(mktemp /tmp/feedback-on-body.XXXXXX)" \
+  && CURL_ERR="$(mktemp /tmp/feedback-on-err.XXXXXX)" \
+  && DATA_FILE="$(mktemp /tmp/feedback-on-data.XXXXXX)" \
+  || { echo "✗ не смог создать временные файлы в /tmp"; exit 1; }
+cleanup() { rm -f "$BODY_FILE" "$CURL_ERR" "$DATA_FILE" ${ENV_TMP:+"$ENV_TMP"}; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM HUP
 
-# gh МЕТОД ПУТЬ [ФАЙЛ_JSON] → код ответа; тело — в $BODY_FILE.
+# gh METHOD PATH [JSON_FILE] → response code; the body goes to $BODY_FILE.
 gh() {
   : > "$BODY_FILE"
   gh_config "$1" "$2" "$TOKEN" "$BODY_FILE" "${3:-}" | curl -K - 2>"$CURL_ERR"
@@ -258,6 +297,12 @@ case "$(repo_verdict "$CODE" "$(cat "$BODY_FILE")")" in
     echo "  ✗ репозиторий ПУБЛИЧНЫЙ — канал не включаю."
     echo "    В отзывы уходят назначение платежа, контрагент, суммы и по галке файл выписки."
     echo "    Сделайте репозиторий приватным (Settings → Danger Zone → Change visibility) и повторите."
+    exit 1 ;;
+  internal)
+    echo "  ✗ у репозитория видимость internal — его читают все участники enterprise. Нужен private."
+    exit 1 ;;
+  archived)
+    echo "  ✗ репозиторий в архиве — задачи в нём не заводятся. Разархивируйте (Settings → Danger Zone)."
     exit 1 ;;
   unauthorized) echo "  ✗ GitHub не принял токен — опечатка при вставке, отозван или истёк"; exit 1 ;;
   forbidden)
@@ -276,7 +321,7 @@ case "$(repo_verdict "$CODE" "$(cat "$BODY_FILE")")" in
 esac
 
 printf '\n── 2. Право заводить задачи ──\n'
-issue_json "$(envv DOMAIN)" > "$DATA_FILE"
+issue_json > "$DATA_FILE"
 CODE="$(gh POST "/repos/$REPO/issues" "$DATA_FILE")"
 case "$(issue_verdict "$CODE")" in
   ok)
@@ -289,7 +334,8 @@ case "$(issue_verdict "$CODE")" in
       else echo "  ⚠ закрыть её не удалось (код ${CLOSE:-нет}) — закройте #$NUM руками, на канал это не влияет"; fi
     fi ;;
   noperm)
-    echo "  ✗ у токена нет права заводить задачи — при выпуске дайте Issues: Read and write"
+    echo "  ✗ GitHub отказал в создании задачи (403): у токена нет права Issues: Read and write,"
+    echo "    либо сработал лимит GitHub — тогда повторите через несколько минут"
     exit 1 ;;
   disabled)
     echo "  ✗ в репозитории выключены задачи — включите: Settings → General → Features → Issues"
