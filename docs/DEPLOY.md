@@ -112,6 +112,8 @@ Watchtower.
 > фронт печёт пустой `siteUrl`, и `/install` откажется биндить события (относительный URL). Также
 > `NUXT_PUBLIC_AUTHOR_NAME`/`NUXT_PUBLIC_AUTHOR_URL` (подвал). Незаданная переменная = пустое значение,
 > без ошибки сборки — проверить можно в `window.__NUXT__.config.public` на задеплоенной странице.
+> ⚠ Пустое значение перекрывает умолчание `nuxt.config.ts` (замерено), поэтому автор подвала при
+> пустых переменных подставляется в самом подвале: «ИП Шевчик И.С.» → `offer.bx-shef.by` (#758).
 >
 > **`docker-compose.prod.yml` на сервере обновляется вручную** — Watchtower подменяет только образы, не
 > compose-файл. После изменений в compose (новые сервисы/переменные, напр. redis #48, `B24_APPLICATION_TOKEN`
@@ -355,7 +357,7 @@ docker run -d --name watchtower --restart unless-stopped \
 
 | Arg / env | Назначение |
 |---|---|
-| `NUXT_PUBLIC_AUTHOR_NAME` / `NUXT_PUBLIC_AUTHOR_URL` | автор в подвале лендинга (иначе дефолт из `nuxt.config.ts`) |
+| `NUXT_PUBLIC_AUTHOR_NAME` / `NUXT_PUBLIC_AUTHOR_URL` | автор в подвале (пусто — «ИП Шевчик И.С.» → `offer.bx-shef.by`, #758) |
 | `DOMAIN` | домен прод-образа (`VIRTUAL_HOST`/`LETSENCRYPT_HOST` для nginx-proxy) |
 | `LETSENCRYPT_EMAIL` | контакт для TLS-сертификата (acme-companion); необязателен |
 

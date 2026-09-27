@@ -2,6 +2,7 @@
 // «закрыть от индексации». Копия списка здесь означала бы, что страница может попасть в пререндер,
 // но не в карту сайта (или наоборот), и заметить это можно только случайно.
 import { PRERENDER_ROUTES, SERVICE_ROUTES } from './app/config/routes'
+import { DEFAULT_AUTHOR_NAME, DEFAULT_AUTHOR_URL } from './app/utils/build'
 
 // Только цифры — защита от случайной опечатки или компрометации ENV в CI.
 const metrikaId = (process.env.NUXT_PUBLIC_METRIKA_ID || '109399587').replace(/\D/g, '')
@@ -54,9 +55,11 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     public: {
-      // Author shown in the landing footer. Override via NUXT_PUBLIC_AUTHOR_*.
-      authorName: 'bx-shef',
-      authorUrl: 'https://bx-shef.by',
+      // Author shown in the footer. Override via NUXT_PUBLIC_AUTHOR_*. ⚠ An EMPTY build variable
+      // overrides these (measured), so BuildFooter falls back to the same defaults via
+      // resolveAuthor — see app/utils/build.ts (#758).
+      authorName: DEFAULT_AUTHOR_NAME,
+      authorUrl: DEFAULT_AUTHOR_URL,
       // Public URL the app is served from. Used by the Bitrix24 install handler
       // to build absolute placement handler URLs once placement.bind lands.
       // Set via NUXT_PUBLIC_SITE_URL at build time (Dockerfile/CI).

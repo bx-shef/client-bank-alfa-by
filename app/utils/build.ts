@@ -26,6 +26,33 @@ export function resolveRepoUrl(value: string | undefined | null): string {
   return v
 }
 
+/**
+ * Автор в подвале по умолчанию (#758, решение владельца 2026-09-27; прежнее умолчание
+ * `bx-shef` / `https://bx-shef.by` снято).
+ *
+ * ⚠ Умолчание применяется ЗДЕСЬ, на пустое значение, а не только в `nuxt.config.ts`: пустая
+ * переменная сборки перекрывает умолчание конфига (замерено: `NUXT_PUBLIC_AUTHOR_NAME=` при
+ * `nuxt generate` даёт `authorName:""`), а `Dockerfile` выставляет её пустой всякий раз, когда
+ * переменная репозитория не задана. У клона без переменных подвал выходил ПУСТЫМ.
+ */
+export const DEFAULT_AUTHOR_NAME = 'ИП Шевчик И.С.'
+export const DEFAULT_AUTHOR_URL = 'https://offer.bx-shef.by/?ref=bank-import'
+
+/**
+ * Автор для подвала: заданное значение или умолчание.
+ *
+ * ⚠ Ссылка по умолчанию идёт ТОЛЬКО вместе с именем по умолчанию: клон, вписавший своё имя без
+ * адреса, получает подпись без ссылки, а не своё имя со ссылкой на наш оффер. Адрес проверяется так
+ * же, как у `resolveRepoUrl`: только `https` — он попадает в `href` на каждом экране.
+ */
+export function resolveAuthor(name: string | undefined | null, url: string | undefined | null): { name: string, url: string } {
+  const n = (name ?? '').trim()
+  const u = (url ?? '').trim()
+  const validUrl = /^https:\/\/[^\s/]+(\/\S*)?$/.test(u) ? u : ''
+  if (!n) return { name: DEFAULT_AUTHOR_NAME, url: validUrl || DEFAULT_AUTHOR_URL }
+  return { name: n, url: validUrl }
+}
+
 /** Short (7-char) commit for display; '' when the SHA is unknown (dev builds). */
 export function shortSha(sha: string | undefined | null): string {
   return (sha ?? '').trim().slice(0, 7)

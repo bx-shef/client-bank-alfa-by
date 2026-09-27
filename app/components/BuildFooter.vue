@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import { START_YEAR, copyrightYears } from '~/utils/landing'
+import { resolveAuthor } from '~/utils/build'
 import BuildSha from '~/components/BuildSha.vue'
 
 // Shared footer: author + a link to the exact build commit.
 const { public: { authorName, authorUrl } } = useRuntimeConfig()
+// Empty build variables override the config defaults, so the fallback lives here too (#758).
+const author = resolveAuthor(authorName, authorUrl)
 
 const years = copyrightYears(START_YEAR, new Date().getFullYear())
 
 const items = [
-  {
-    label: authorName,
-    to: authorUrl,
-    target: '_blank'
-  }
+  author.url
+    ? { label: author.name, to: author.url, target: '_blank' }
+    : { label: author.name }
 ]
 </script>
 

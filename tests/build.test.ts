@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REPO_URL, commitUrl, healthInfo, resolveRepoUrl, shortSha } from '~/utils/build'
+import { DEFAULT_AUTHOR_NAME, DEFAULT_AUTHOR_URL, REPO_URL, commitUrl, healthInfo, resolveAuthor, resolveRepoUrl, shortSha } from '~/utils/build'
 
 describe('shortSha', () => {
   it('takes the first 7 chars', () => {
@@ -61,5 +61,34 @@ describe('репозиторий сборки (клон у клиента)', () 
   it('/api/health отдаёт ссылку того же репозитория', () => {
     expect(healthInfo('abc123', '2026-09-12T00:00:00.000Z', 'https://github.com/client/app').commitUrl)
       .toBe('https://github.com/client/app/commit/abc123')
+  })
+})
+
+describe('resolveAuthor (#758)', () => {
+  it('по умолчанию — «ИП Шевчик И.С.» со ссылкой на оффер', () => {
+    expect(DEFAULT_AUTHOR_NAME).toBe('ИП Шевчик И.С.')
+    expect(DEFAULT_AUTHOR_URL).toBe('https://offer.bx-shef.by/?ref=bank-import')
+  })
+
+  it('пустые значения (так их отдаёт незаданная переменная сборки) — умолчание целиком', () => {
+    // ⚠ Пустая переменная перекрывает умолчание nuxt.config — замерено сборкой.
+    for (const v of ['', '   ', undefined, null]) {
+      expect(resolveAuthor(v, v)).toEqual({ name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL })
+    }
+  })
+
+  it('заданные значения — как есть', () => {
+    expect(resolveAuthor('ООО Ромашка', 'https://romashka.example.by/'))
+      .toEqual({ name: 'ООО Ромашка', url: 'https://romashka.example.by/' })
+  })
+
+  it('своё имя без адреса — без ссылки, а не со ссылкой на наш оффер', () => {
+    expect(resolveAuthor('ООО Ромашка', '')).toEqual({ name: 'ООО Ромашка', url: '' })
+  })
+
+  it('адрес только https: иное в href не попадает', () => {
+    expect(resolveAuthor('ООО Ромашка', 'javascript:alert(1)').url).toBe('')
+    expect(resolveAuthor('ООО Ромашка', 'http://romashka.example.by').url).toBe('')
+    expect(resolveAuthor('', 'javascript:alert(1)')).toEqual({ name: DEFAULT_AUTHOR_NAME, url: DEFAULT_AUTHOR_URL })
   })
 })
