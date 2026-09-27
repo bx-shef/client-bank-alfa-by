@@ -337,6 +337,18 @@ describe('обход и ключи', () => {
     expect(r.out).toContain('с нулевой суммой: 5')
   })
 
+  it('страницы пересекаются частично — общая строка не задваивается', async () => {
+    // Повтор страницы ЦЕЛИКОМ ловит сравнение страниц, а сдвиг пагинации — нет: сигнатуры
+    // страниц разные, и одна операция попала бы в обе. Задвоенная сумма испортила бы сверку
+    // со statistics[] — ровно тот ответ, ради которого проба написана.
+    const st = usdStatement()
+    const overlap = (st.page as Json[])[1]!
+    scenario.statement = (_n, p) => ({ body: p === 0 ? st : p === 1 ? { page: [overlap, { ...overlap, docId: 'R3' }] } : { page: [] } })
+    const r = await run()
+    expect(r.out).toContain('операций: 5')
+    expect(r.out).toContain('страниц: 3')
+  })
+
   it('два ключа на портале: валютный счёт второго спрашивается ЕГО токеном', async () => {
     scenario.accounts = {
       [TOKEN]: { accounts: [{ number: BYN, currIso: 'BYN' }] },
@@ -358,6 +370,13 @@ describe('отказы', () => {
     expect(r.out).toContain('Обновлять токен руками НЕЛЬЗЯ')
   })
 
+  it('токен отвергнут на выписке, после удачного /accounts/ — тоже код 2', async () => {
+    scenario.statement = () => ({ status: 401, body: { error: 'invalid_token' } })
+    const r = await run()
+    expect(r.code).toBe(2)
+    expect(r.out).toContain('вердикта нет — токен отвергнут банком')
+  })
+
   it('ответ с errors[] и пустым page[] — ошибка, а не «операций нет»', async () => {
     scenario.statement = () => ({ body: { page: [], errors: [{ number: USD, message: `Token expired for ${USD}` }] } })
     const r = await run()
@@ -366,6 +385,20 @@ describe('отказы', () => {
     expect(r.out).toContain('вердикта нет')
     expect(r.out).not.toContain('за период операций нет')
     // Текст банка не печатается: в нём номер счёта открытым текстом.
+    expect(r.out).not.toContain(USD)
+  })
+
+  it('errors[] рядом с НЕПУСТЫМ page[] — тоже отказ, а не частичный успех', async () => {
+    scenario.statement = () => ({
+      body: {
+        page: [{ number: USD, operType: 'C', amount: 100, currIso: 'USD', operCodeName: 'Зачисление', docId: 'DX' }],
+        errors: [{ number: USD, message: `Token expired for ${USD}` }]
+      }
+    })
+    const r = await run()
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('банк ответил ошибкой по счёту (поля errors[]: message number)')
+    expect(r.out).not.toContain('операций: 1')
     expect(r.out).not.toContain(USD)
   })
 
