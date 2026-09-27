@@ -1,0 +1,25 @@
+# Что сервер ВМ Битрикс24 берёт из клиентского репозитория (docs/DEPLOY_BITRIXVM.md, шаг 1b).
+# Формат — шаблоны git sparse-checkout (--no-cone): путь от корня репозитория, каталог — со «/».
+# Исходников приложения здесь нет и быть не должно: сервер получает готовые образы из GHCR.
+#
+# ⚠ Новая make-цель со своим скриптом обязана попасть сюда, иначе на сервере она упадёт с
+# «файл не найден». Сверку держит tests/serverFiles.test.ts. Сервер применяет список заново при
+# каждом `make self-update`, так что добавленный файл доезжает сам.
+/Makefile
+/docker-compose.prod.yml
+/deploy/bitrixvm/
+/scripts/bitrixvm-check.sh
+/scripts/oauth-refresh-ladder.sh
+/scripts/oauth-refresh-probe.sh
+/scripts/prior-host-probe.sh
+/scripts/prior-switch-host.sh
+/scripts/prod-alfa-page-probe.sh
+/scripts/prod-bank-history.sh
+/scripts/prod-chat-log.sh
+/scripts/prod-connect-log.sh
+/scripts/prod-doctor.sh
+/scripts/prod-feedback-on.sh
+/scripts/prod-payers.sh
+/scripts/prod-poll-check.sh
+/scripts/prod-reap-status.sh
+/scripts/queue-stats.sh
