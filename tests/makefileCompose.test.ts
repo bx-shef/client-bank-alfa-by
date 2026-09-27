@@ -145,7 +145,7 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     const { dir, home } = cronHome()
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
     mkdirSync(src, { recursive: true })
-    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\n# git ls-remote\necho "NEW ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE cfg=$BANK_APP_DEPLOY_CONFIG"\n')
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho "NEW ignore=$BANK_APP_DEPLOY_IGNORE_PAUSE cfg=$BANK_APP_DEPLOY_CONFIG"\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\n')
     const r = run(dir, home, 'deploy-install')
     expect(r.status, r.stdout + r.stderr).toBe(0)
     const cfg = join(home, 'bank-app-deploy')
@@ -154,8 +154,8 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(readFileSync(join(cfg, 'deploy.log'), 'utf8')).toContain('NEW ignore=')
   })
 
-  // Годный новый скрипт — разбирается и несёт опрос git (пустой файл тоже «разбирается»).
-  const NEW_SCRIPT = '#!/bin/sh\n# git ls-remote\necho NEW\n'
+  // Годный новый скрипт — разбирается и кончается строкой-меткой (пустой файл тоже «разбирается»).
+  const NEW_SCRIPT = '#!/bin/sh\necho NEW\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\n'
   const withSrc = (dir: string, body: string) => {
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
     mkdirSync(src, { recursive: true })
@@ -164,17 +164,48 @@ describe('deploy-*: автообновление cron под bitrix', () => {
   const backups = (home: string) => readdirSync(join(home, 'bin')).filter(f => f.startsWith('bank-app-deploy.bak-'))
 
   it.each([
-    ['не разбирается', '#!/bin/sh\n# git ls-remote\nif then\n'],
+    ['не разбирается', '#!/bin/sh\nif then\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\n'],
     ['пустой', ''],
-    ['без опроса git (обрезан)', '#!/bin/sh\necho half\n']
+    ['обрезан (нет последней строки-метки)', '#!/bin/sh\necho half\n'],
+    // Метка в СЕРЕДИНЕ файла пропускала бы обрезанный ниже неё — поэтому смотрим только последнюю строку.
+    ['обрезан ниже метки', '#!/bin/sh\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\necho tail\n']
   ])('deploy-install: скрипт %s — не ставит, работающий остаётся на месте', (_, body) => {
     const { dir, home } = cronHome()
     withSrc(dir, body)
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('не годится')
+    expect(r.stdout).toContain('работает прежний')
     expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toContain('echo "RUN')
     expect(backups(home)).toEqual([])
+  })
+
+  // Метку ставит настоящий скрипт — проверяем на нём, а не только на подставных: иначе смена его
+  // последней строки молча закрыла бы переустановку на всех серверах.
+  it('deploy-install принимает настоящий скрипт автообновления и отвергает его обрезанную копию', () => {
+    const real = readFileSync(POLLER, 'utf8')
+    const whole = cronHome()
+    withSrc(whole.dir, real)
+    const r = run(whole.dir, whole.home, 'deploy-install')
+    expect(r.stdout).not.toContain('не годится')
+    expect(readFileSync(join(whole.home, 'bin', 'bank-app-deploy'), 'utf8')).toBe(real)
+
+    const cut = cronHome()
+    const lines = real.split('\n')
+    withSrc(cut.dir, lines.slice(0, Math.floor(lines.length * 0.8)).join('\n') + '\n')
+    const rc = run(cut.dir, cut.home, 'deploy-install')
+    expect(rc.status).not.toBe(0)
+    expect(rc.stdout).toContain('не годится')
+  })
+
+  it('deploy-install впервые и скрипт негоден — о «прежнем» не говорит: его нет', () => {
+    const { dir, home } = cronHome()
+    rmSync(join(home, 'bin', 'bank-app-deploy'))
+    withSrc(dir, '')
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).toContain('не годится')
+    expect(r.stdout).not.toContain('работает прежний')
   })
 
   it('deploy-install оставляет прежний скрипт копией с отметкой времени и называет её', () => {
@@ -212,7 +243,7 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     const { dir, home } = cronHome()
     const src = join(dir, 'src', 'deploy', 'bitrixvm')
     mkdirSync(src, { recursive: true })
-    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\n# git ls-remote\necho broken\nexit 2\n')
+    writeFileSync(join(src, 'git-poll-deploy.sh'), '#!/bin/sh\necho broken\nexit 2\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\n')
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
     expect(r.stdout).toContain('broken')
@@ -309,6 +340,12 @@ describe('на ВМ с автообновлением prod-pull/prod-redeploy о
     writeFileSync(join(sibling, 'deploy.env'), '')
     expect(call('prod-up').status).toBe(0)
     expect(calls()).toContain(`flock -w 900 ${deploy}/state/deploy.lock docker compose -f docker-compose.prod.yml up -d`)
+  })
+
+  it('prod-down — без замка: остановку нельзя заставлять ждать идущий выкат (#769)', () => {
+    const { call, calls } = vm('home')
+    expect(call('prod-down').status).toBe(0)
+    expect(calls()).toEqual(['docker compose -f docker-compose.prod.yml down'])
   })
 
   it('prod-up, когда скрипт ещё не запускался (замка нет) — без замка и без его создания', () => {

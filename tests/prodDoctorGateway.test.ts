@@ -199,6 +199,14 @@ describe('шлюз запущен — проверяется сам шлюз', (
     expect(out).toContain('неразрешённый путь отбивается шлюзом')
     expect(out).not.toContain('crypto-gw не используется')
     expect(out).not.toContain('Приорбанк настроен через шлюз, а crypto-gw')
+    // Исправные адреса — без ложной тревоги.
+    expect(out).not.toContain('приложение не примет')
+    expect(out).not.toContain('наполовину')
+  })
+
+  it('шлюз жив, а адрес токенов не задан — половинчатая настройка названа и здесь', () => {
+    const { out } = doctor({ FAKE_GW: 'running', FAKE_API: GW, FAKE_TOKEN: '' })
+    expect(out).toContain('Приорбанк настроен наполовину (API_BASE — через шлюз crypto-gw:1080, TOKEN_URL — не задан)')
   })
 })
 
