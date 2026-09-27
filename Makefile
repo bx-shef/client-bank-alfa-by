@@ -3,7 +3,7 @@
         gw-stop gw-start compose-update alfa-page-probe alfa-currency-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
         bank-connect-log chat-log feedback-on \
-        bitrix-check deploy-status deploy-now deploy-pause deploy-resume
+        bitrix-check deploy-status deploy-now deploy-pause deploy-resume deploy-install
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
 # Прод-цели читают переменные из ./.env (DOMAIN, LETSENCRYPT_EMAIL — см. .env.example).
@@ -34,20 +34,49 @@ build-local:
 # currency-converter) и docker-сеть proxy-net. Свой Watchtower НЕ поднимаем —
 # хостовый подхватывает контейнер по метке (см. docs/DEPLOY.md).
 
+# Автообновление по git этого стека (docs/DEPLOY_BITRIXVM.md, шаг 6): каталог с `deploy.env` у
+# того, кто запустил make (как у целей `deploy-*`), либо рядом со стеком —
+# `/home/bitrix/bank-app-deploy` для `/home/bitrix/bank-import`. Второе — чтобы root, запустивший
+# make в каталоге стека, упирался в запрет и замок ниже, а не обходил их молча.
+FIND_AUTODEPLOY = ad=""; for d in "$(CRON_DEPLOY)" "$(abspath $(CURDIR)/../bank-app-deploy)"; do \
+	  if [ -e "$$d/deploy.env" ]; then ad="$$d"; break; fi; done
+# ⚠ Ручной `up -d` на ВМ с автообновлением идёт ПОД ЗАМКОМ скрипта обновления (#766). Иначе он мог
+# вклиниться между подъёмом новой версии и её перетегированием: контейнеры пересоздались бы из
+# прежнего `:latest`, проверка здоровья прошла бы на СТАРОЙ версии, и скрипт записал бы новую
+# развёрнутой — сервер молча остался бы на старой. Идущий прогон дожидаемся, а не пропускаем.
+# Файла замка нет — скрипт не запускался ни разу, и ждать некого. Создавать его отсюда нельзя:
+# запусти make root — и чужой каталог состояния получил бы файл, в который скрипт не сможет писать.
+# Использование: `$(DEPLOY_LOCKED) "$$@" <команда>` — без автообновления "$$@" пуст.
+DEPLOY_LOCKED = $(FIND_AUTODEPLOY); if [ -n "$$ad" ] && [ -e "$$ad/state/deploy.lock" ]; then \
+	  flock -n "$$ad/state/deploy.lock" true || echo "[make] идёт прогон автообновления — жду его окончания (до 15 минут; не дождусь — повторите команду)"; \
+	  set -- flock -w 900 "$$ad/state/deploy.lock"; else set --; fi;
+
 ## Запустить / обновить app-контейнер
 prod-up:
-	$(DC) up -d
+	@$(DEPLOY_LOCKED) "$$@" $(DC) up -d
 
 ## Остановить стек
+#
+# ⚠ Без замка автообновления НАМЕРЕННО, в отличие от prod-up: остановку, в том числе аварийную,
+# нельзя заставлять ждать идущий выкат. Что при этом может поднять стек снова — #769.
 prod-down:
 	$(DC) down
 
+# ⚠ На ВМ с автообновлением по git (есть `deploy.env`, docs/DEPLOY_BITRIXVM.md, шаг 6) две цели
+# ниже ОТКАЗЫВАЮТ: они тянут `:latest` ИЗ РЕЕСТРА, а CI публикует его на каждом мёрже — в том числе
+# версию, которую автообновление только что откатило по проверке здоровья. `prod-redeploy` поднял
+# бы её мимо всякой проверки, `prod-pull` подложил бы её под следующий ручной `prod-up` (#766).
+AUTODEPLOY_GUARD = $(FIND_AUTODEPLOY); if [ -n "$$ad" ]; then \
+	echo "[make] здесь работает автообновление по git, а эта цель скачала бы :latest из реестра мимо проверки здоровья. Выпуск — make deploy-now, применить правку .env — make prod-up"; exit 1; fi
+
 ## Скачать свежий образ (без перезапуска контейнера)
 prod-pull:
+	@$(AUTODEPLOY_GUARD)
 	$(DC) pull
 
 ## Принудительно обновить прямо сейчас (без ожидания Watchtower)
 prod-redeploy:
+	@$(AUTODEPLOY_GUARD)
 	$(DC) pull && \
 	$(DC) up -d && \
 	docker image prune -f
@@ -119,7 +148,7 @@ SINCE ?= 3h
 # ⚠ `override`, как и у `REF`: значение параметра `make` раскрывается ДО всякого шелла, и
 # `make … SRC=…` иначе увёл бы скачивание куда угодно. Решает наличие копии на диске, а не
 # командная строка.
-SRC_DIR := src
+override SRC_DIR := src
 override SRC := $(if $(wildcard $(CURDIR)/$(SRC_DIR)/.git),file://$(CURDIR)/$(SRC_DIR),https://raw.githubusercontent.com/bx-shef/client-bank-alfa-by/$(REF))
 override RAW := $(SRC)/scripts
 # Обновить копию клиентского репозитория, если она есть. Без копии — пусто (наш сервер).
@@ -192,12 +221,12 @@ self-update:
 
 ## Остановить крипто-шлюз (не нужен, пока Приор ходит напрямую на :9344)
 #
-# ⚠ Это ВРЕМЕННО: `prod-redeploy` поднимет его снова, пока сервис не закомментирован в
+# ⚠ Это ВРЕМЕННО: `prod-up` и `prod-redeploy` поднимут его снова, пока сервис не закомментирован в
 # `docker-compose.prod.yml`. Насовсем — `make compose-update` (в репозитории он выключен по
 # умолчанию) либо закомментировать вручную. Цель нужна ровно для «выключить прямо сейчас».
 gw-stop:
 	@$(DC) stop crypto-gw \
-	  && echo "[make] crypto-gw остановлен. ⚠ prod-redeploy поднимет его снова — см. compose-update"
+	  && echo "[make] crypto-gw остановлен. ⚠ prod-up и prod-redeploy поднимут его снова — см. compose-update"
 
 ## Поднять крипто-шлюз обратно (понадобится при сертификации СКЗИ)
 gw-start:
@@ -207,7 +236,7 @@ gw-start:
 ## Обновить docker-compose.prod.yml из репозитория (ЗАТРЁТ локальные правки — сперва покажет их)
 #
 #   make compose-update              # только показать, что изменится
-#   make compose-update CONFIRM=1    # применить
+#   CONFIRM=1 make compose-update    # применить
 #
 # ⚠ Файл на сервере правят руками (так включали крипто-шлюз), поэтому слепая замена уничтожила бы
 # настройку, о которой никто не помнит. Отсюда два шага и обязательный CONFIRM.
@@ -229,8 +258,8 @@ compose-update:
 	       if [ "$${CONFIRM:-}" = "1" ]; then \
 	         b="./docker-compose.prod.yml.bak-$$(date +%Y%m%d-%H%M%S)"; \
 	         cp ./docker-compose.prod.yml "$$b" && cp "$$t" ./docker-compose.prod.yml \
-	         && echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy"; \
-	       else echo "[make] это был показ. Применить: make compose-update CONFIRM=1"; fi; }
+	         && echo "[make] заменён, копия прежнего: $$b. Применить: make prod-redeploy, на ВМ с автообновлением — make prod-up"; \
+	       else echo "[make] это был показ. Применить: CONFIRM=1 make compose-update"; fi; }
 
 ## Список целей с описаниями
 #
@@ -270,6 +299,17 @@ bitrix-check:
 # же, что в строке crontab из шага 6.
 CRON_DEPLOY = $$HOME/bank-app-deploy
 NO_AUTODEPLOY = echo "[make] автообновление не настроено: нет $(CRON_DEPLOY)/deploy.env (запускайте из-под bitrix) — docs/DEPLOY_BITRIXVM.md, шаг 6"; exit 1
+# Один прогон скрипта обновления с путями строки crontab из шага 6. Вывод идёт и на экран, и в тот
+# же лог, что пишет расписание: иначе ручной прогон не оставлял бы следа, и `deploy-status`
+# показывал бы картину без него. Идущий прогон расписания ручной дожидается (до 15 минут), а не
+# пропускает.
+# ⚠ Код выхода — скрипта, а не `tee`: у конвейера он последней команды, и упавший прогон
+# отчитывался бы успехом. `pipefail` в `sh` не везде, поэтому код уносит файл.
+# Использование: `$(call DEPLOY_RUN,<доп. переменные окружения>)`.
+DEPLOY_RUN = ( rc=$$(mktemp) || exit 1; { $(1) BANK_APP_DEPLOY_LOCK_WAIT=900 \
+	     BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
+	     "$$HOME/bin/bank-app-deploy" 2>&1; echo $$? > "$$rc"; } | tee -a "$(CRON_DEPLOY)/deploy.log"; \
+	     code=$$(cat "$$rc"); rm -f "$$rc"; exit "$$code" )
 
 ## Состояние автообновления: включено ли, какой коммит развёрнут, последний прогон
 deploy-status:
@@ -285,15 +325,40 @@ deploy-status:
 	 else $(NO_AUTODEPLOY); fi
 
 ## Проверить обновления ПРЯМО СЕЙЧАС, не дожидаясь тика (паузу обходит — это явное действие)
-#
-# ⚠ Вывод идёт и на экран, и в тот же лог, что пишет расписание: иначе ручной
-# прогон не оставлял бы следа, и `deploy-status` показывал бы картину без него.
 deploy-now:
 	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
-	   BANK_APP_DEPLOY_IGNORE_PAUSE=1 \
-	   BANK_APP_DEPLOY_CONFIG="$(CRON_DEPLOY)/deploy.env" \
-	   BANK_APP_DEPLOY_STATE="$(CRON_DEPLOY)/state" \
-	     "$$HOME/bin/bank-app-deploy" 2>&1 | tee -a "$(CRON_DEPLOY)/deploy.log"; \
+	   $(call DEPLOY_RUN,BANK_APP_DEPLOY_IGNORE_PAUSE=1); \
+	 else $(NO_AUTODEPLOY); fi
+
+## Переустановить скрипт автообновления из копии репозитория и сразу прогнать его (после self-update)
+#
+# ⚠ Скрипт сам себя не обновляет: `make self-update` приносит свежую копию в `./src`, а работает
+# установленная в `~/bin`. Прогон сразу после установки — обычный тик, паузу он соблюдает: в начале
+# тика новый скрипт возвращает локальный `:latest` на развёрнутую версию (#766), и ждать расписания
+# незачем.
+# ⚠ Ставится только годный скрипт, а прежний остаётся копией с отметкой времени: его каждые пять
+# минут запускает cron, и битый файл из неудачного слияния остановил бы и выкаты, и сверку
+# `:latest` — молча. Годный — разбирается (`bash -n`) и кончается строкой-меткой: пустой или
+# обрезанный файл синтаксически цел, а метка в середине пропускала бы файл, обрезанный ниже неё.
+# Копия — только если файл действительно меняется, иначе повтор команды затирал бы копиями
+# рабочую версию.
+deploy-install:
+	@if [ -r "$(CRON_DEPLOY)/deploy.env" ]; then \
+	   s="./$(SRC_DIR)/deploy/bitrixvm/git-poll-deploy.sh"; b="$$HOME/bin/bank-app-deploy"; \
+	   if [ ! -r "$$s" ]; then echo "[make] нет $$s — сперва make self-update (docs/DEPLOY_BITRIXVM.md, шаг 1b)"; exit 1; fi; \
+	   refuse() { echo "[make] $$s $$1 — не ставлю"; \
+	     echo "[make] чинить файл в репозитории, откуда берётся ./$(SRC_DIR), затем make self-update и снова make deploy-install; ./$(SRC_DIR) руками не править"; \
+	     if [ -e "$$b" ] && cmp -s "$$s" "$$b"; then echo "[make] ⚠ установлен такой же скрипт, с тем же дефектом: автообновление может не работать вовсе (и :latest не сверяется) или выкатывать без проверки здоровья и отката. До исправной копии — make deploy-pause и не перезапускать стек руками"; \
+	     elif [ -e "$$b" ]; then echo "[make] остаётся установленный: $$b"; fi; exit 1; }; \
+	   bash -n "$$s" || refuse "не годится: не разбирается"; \
+	   grep -v '^[[:space:]]*$$' "$$s" | tail -n 1 | grep -qx '[[:space:]]*# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ[[:space:]]*' \
+	     || refuse "не годится: обрезан (нет последней строки «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»)"; \
+	   mkdir -p "$$HOME/bin" "$(CRON_DEPLOY)/state" || exit 1; \
+	   if [ -e "$$b" ] && ! cmp -s "$$s" "$$b"; then \
+	     k="$$b.bak-$$(date +%Y%m%d-%H%M%S)"; cp "$$b" "$$k" || exit 1; echo "[make] прежний скрипт сохранён: $$k"; fi; \
+	   install -m 755 "$$s" "$$b" \
+	   && echo "[make] скрипт автообновления установлен из $$s" \
+	   && $(call DEPLOY_RUN,); \
 	 else $(NO_AUTODEPLOY); fi
 
 ## Приостановить автообновление (работающее приложение не трогает)
@@ -540,7 +605,7 @@ reap-off:
 	  && cp .env .env.bak.$$(date +%Y%m%d%H%M%S) \
 	  && sed -i '/^PORTAL_REAP_ENABLED=/d' .env \
 	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
-	  && $(DC) up -d backend \
+	  && { $(DEPLOY_LOCKED) "$$@" $(DC) up -d backend; } \
 	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
 
 ## Включить обратную связь: спросит репозиторий и токен, проверит права, перезапустит (#499)
@@ -561,5 +626,5 @@ feedback-on:
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-feedback-on.sh" \
 	  && bash "$$t" \
 	  && n=$$($(DC) ps -q worker 2>/dev/null | wc -l) \
-	  && $(DC) up -d --scale worker=$$(( n > 0 ? n : 1 )) backend worker \
+	  && { $(DEPLOY_LOCKED) "$$@" $(DC) up -d --scale worker=$$(( n > 0 ? n : 1 )) backend worker; } \
 	  && bash "$$t" --verify "$(DC)"
