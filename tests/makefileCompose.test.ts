@@ -186,11 +186,21 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(run(syntax.dir, syntax.home, 'deploy-install').stdout).toContain('не годится: не разбирается')
     const cut = cronHome()
     withSrc(cut.dir, '#!/bin/sh\necho half\n')
-    // Лекарство названо: чинить файл в репозитории. Дописать метку в ./src руками значило бы
-    // поставить обрезанный скрипт и потом упереться в `git pull --ff-only` у self-update.
-    const out = run(cut.dir, cut.home, 'deploy-install').stdout
-    expect(out).toContain('не годится: обрезан (нет последней строки «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»)')
-    expect(out).toContain('Чинить файл в репозитории, затем make self-update; ./src руками не править')
+    expect(run(cut.dir, cut.home, 'deploy-install').stdout)
+      .toContain('не годится: обрезан (нет последней строки «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»)')
+  })
+
+  // Лекарство — у ОБОИХ отказов: чинить в репозитории и снова ставить. Правка ./src руками поставила
+  // бы испорченный скрипт и заперла self-update локальной правкой (`git pull --ff-only`), а
+  // self-update без повторного deploy-install ~/bin не обновляет.
+  it.each([
+    ['не разбирается', '#!/bin/sh\n<<<<<<< HEAD\nif then\n# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ\n'],
+    ['обрезан', '#!/bin/sh\necho half\n']
+  ])('deploy-install: отказ «%s» называет лекарство целиком', (_, body) => {
+    const { dir, home } = cronHome()
+    withSrc(dir, body)
+    expect(run(dir, home, 'deploy-install').stdout)
+      .toContain('чинить файл в репозитории, откуда берётся ./src, затем make self-update и снова make deploy-install; ./src руками не править')
   })
 
   // Одинаковый с отвергнутым установленный скрипт не обязательно «не работает»: обрезанный перед
@@ -201,7 +211,7 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     withSrc(dir, '')
     const r = run(dir, home, 'deploy-install')
     expect(r.status).not.toBe(0)
-    expect(r.stdout).toContain('установлен такой же скрипт, с тем же дефектом: выкаты могут идти без проверки здоровья и отката. До исправной копии — make deploy-pause')
+    expect(r.stdout).toContain('установлен такой же скрипт, с тем же дефектом: автообновление может не работать вовсе (и :latest не сверяется) или выкатывать без проверки здоровья и отката. До исправной копии — make deploy-pause и не перезапускать стек руками')
     expect(r.stdout).not.toContain('остаётся установленный')
   })
 
@@ -270,6 +280,18 @@ describe('deploy-*: автообновление cron под bitrix', () => {
     expect(backups(home)).toHaveLength(1)
     expect(readFileSync(join(home, 'bin', backups(home)[0]), 'utf8')).toContain('echo "RUN')
     expect(r.stdout).not.toContain('сохранён')
+  })
+
+  // Шаг 6 рантбука ставит скрипт впервые именно так: ~/bin и state ещё нет, deploy.env уже есть.
+  it('deploy-install на чистой ВМ — сам заводит ~/bin и state, ставит и прогоняет', () => {
+    const { dir, home } = cronHome()
+    rmSync(join(home, 'bin'), { recursive: true })
+    withSrc(dir, NEW_SCRIPT)
+    const r = run(dir, home, 'deploy-install')
+    expect(r.status, r.stdout + r.stderr).toBe(0)
+    expect(readFileSync(join(home, 'bin', 'bank-app-deploy'), 'utf8')).toBe(NEW_SCRIPT)
+    expect(existsSync(join(home, 'bank-app-deploy', 'state'))).toBe(true)
+    expect(r.stdout).toContain('NEW')
   })
 
   it('deploy-install впервые — копии нет, и о ней не говорится', () => {

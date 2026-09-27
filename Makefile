@@ -347,11 +347,12 @@ deploy-install:
 	   s="./$(SRC_DIR)/deploy/bitrixvm/git-poll-deploy.sh"; b="$$HOME/bin/bank-app-deploy"; \
 	   if [ ! -r "$$s" ]; then echo "[make] нет $$s — сперва make self-update (docs/DEPLOY_BITRIXVM.md, шаг 1b)"; exit 1; fi; \
 	   refuse() { echo "[make] $$s $$1 — не ставлю"; \
-	     if [ -e "$$b" ] && cmp -s "$$s" "$$b"; then echo "[make] ⚠ установлен такой же скрипт, с тем же дефектом: выкаты могут идти без проверки здоровья и отката. До исправной копии — make deploy-pause"; \
+	     echo "[make] чинить файл в репозитории, откуда берётся ./$(SRC_DIR), затем make self-update и снова make deploy-install; ./$(SRC_DIR) руками не править"; \
+	     if [ -e "$$b" ] && cmp -s "$$s" "$$b"; then echo "[make] ⚠ установлен такой же скрипт, с тем же дефектом: автообновление может не работать вовсе (и :latest не сверяется) или выкатывать без проверки здоровья и отката. До исправной копии — make deploy-pause и не перезапускать стек руками"; \
 	     elif [ -e "$$b" ]; then echo "[make] остаётся установленный: $$b"; fi; exit 1; }; \
 	   bash -n "$$s" || refuse "не годится: не разбирается"; \
 	   grep -v '^[[:space:]]*$$' "$$s" | tail -n 1 | grep -qx '[[:space:]]*# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ[[:space:]]*' \
-	     || refuse "не годится: обрезан (нет последней строки «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»). Чинить файл в репозитории, затем make self-update; ./src руками не править"; \
+	     || refuse "не годится: обрезан (нет последней строки «# КОНЕЦ СКРИПТА АВТООБНОВЛЕНИЯ»)"; \
 	   mkdir -p "$$HOME/bin" "$(CRON_DEPLOY)/state" || exit 1; \
 	   if [ -e "$$b" ] && ! cmp -s "$$s" "$$b"; then \
 	     k="$$b.bak-$$(date +%Y%m%d-%H%M%S)"; cp "$$b" "$$k" || exit 1; echo "[make] прежний скрипт сохранён: $$k"; fi; \
