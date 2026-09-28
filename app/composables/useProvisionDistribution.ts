@@ -17,6 +17,8 @@ export interface ProvisionResponse {
   created?: boolean
   addedFields?: number
   storedChanged?: boolean
+  /** Дошла ли раскладка карточки «Платежи» до всех сотрудников (лучшие усилия на сервере). */
+  cardConfigured?: boolean
   error?: string
 }
 
@@ -24,6 +26,11 @@ export function useProvisionDistribution() {
   const provisioning = ref(false)
   const error = ref('')
   const message = ref('')
+  /** Смарт-процессы на месте, но карточка настроена не до конца: не ошибка, но админ узнаёт сразу. */
+  const warning = ref('')
+  /** Дошла ли раскладка карточки «Платежи» до всех: `null` — не знаем (не запускали, отказ целиком
+   *  или ответ старого backend без этого поля). Читает вердикт установки. */
+  const cardConfigured = ref<boolean | null>(null)
   /** entityTypeId созданных/найденных СП — из них строятся ссылки в портал. */
   const paymentSpEtid = ref<number | null>(null)
   const distributionSpEtid = ref<number | null>(null)
@@ -40,6 +47,8 @@ export function useProvisionDistribution() {
     enabled.value = a !== null
     error.value = ''
     message.value = ''
+    warning.value = ''
+    cardConfigured.value = null
     if (!a) {
       error.value = 'Настройка смарт-процессов доступна только внутри портала Bitrix24'
       return
@@ -51,7 +60,20 @@ export function useProvisionDistribution() {
       // ссылками (см. ProvisionSpCard), а здесь остаётся только «что произошло».
       paymentSpEtid.value = Number(res?.paymentSpEtid) || null
       distributionSpEtid.value = Number(res?.distributionSpEtid) || null
-      message.value = res?.created ? 'Смарт-процессы созданы.' : 'Смарт-процессы уже были на месте.'
+      // ⚠ Строго булево: поле отсутствует у ответа сервера старше этой правки (образы статики и
+      // backend выкатываются порознь), и «не знаем» не должно читаться ни как «удалось», ни как
+      // «не удалось».
+      cardConfigured.value = typeof res?.cardConfigured === 'boolean' ? res.cardConfigured : null
+      message.value = res?.created
+        ? 'Смарт-процессы созданы.'
+        : cardConfigured.value === true
+          ? 'Смарт-процессы и раскладка карточки «Платежи» на месте.'
+          : 'Смарт-процессы уже были на месте.'
+      if (cardConfigured.value === false) {
+        warning.value = 'Раскладку карточки «Платежи» применить не удалось: у всех сотрудников или у '
+          + 'части из них в карточке может не быть клиента и реквизитов вашей компании. Смарт-процессы '
+          + 'и поля на месте. Повторите настройку позже.'
+      }
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
       const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status
@@ -63,5 +85,5 @@ export function useProvisionDistribution() {
     }
   }
 
-  return { provision, syncEnabled, provisioning, error, message, enabled, paymentSpEtid, distributionSpEtid }
+  return { provision, syncEnabled, provisioning, error, message, warning, cardConfigured, enabled, paymentSpEtid, distributionSpEtid }
 }

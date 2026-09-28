@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BOT_MESSAGE_METHOD, forgetBot, resetBotCache, resolveBotId } from '../server/utils/chatBotSend'
 import { CHAT_MESSAGE_METHOD, notifyChatViaRest, postChatMessage } from '../server/utils/chatNotifyWrite'
 import { notifyUnmatchedViaRest } from '../server/utils/unmatchedNotify'
@@ -457,5 +457,131 @@ describe('аватар бота — иконка приложения (#496)', (
       return { result: { id: 100 } }
     }
     expect(await postChatMessage('chat1', 'привет', call, 'M-AV3')).toBe('100')
+  })
+})
+
+// ⚠ Жалоба владельца 2026-09-28: «бота вообще не вижу», сообщения и дела — от установившего. Три
+// пути отказа бота молчали НАВСЕГДА, и причину нельзя было прочитать нигде. Теперь каждый говорит в
+// лог — но не чаще раза в час на портал и вид отказа, иначе сотни сообщений в день забили бы лог.
+describe('молчащие отказы бота — в лог, не чаще раза в час на портал', () => {
+  let lines: string[] = []
+  beforeEach(() => {
+    lines = []
+    vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+      lines.push(String(c))
+      return true
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+  const about = (needle: string) => lines.filter(l => l.includes('[chat]') && l.includes(needle))
+
+  it('временный сбой регистрации: причина в логе, повтор на следующем сообщении — без второй строки', async () => {
+    const { call } = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('socket hang up')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('регистрация бота не удалась')).toHaveLength(1)
+    expect(about('регистрация бота не удалась')[0]).toContain('socket hang up')
+  })
+
+  it('отказ отправки ботом без вложения — тоже в лог, раз на портал в пределах часа', async () => {
+    const { call } = fake({
+      [BOT_MESSAGE_METHOD]: () => {
+        throw new Error('BOT_NOT_FOUND')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(1)
+    expect(about('бот не принял сообщение')[0]).toContain('BOT_NOT_FOUND')
+  })
+
+  it('ответ регистрации без id — в лог, а не в тишину', async () => {
+    const { call } = fake({ 'imbot.v2.Bot.register': () => ({ result: { nothing: true } }) })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    expect(about('регистрацию бота без id')).toHaveLength(1)
+  })
+
+  it('каждый портал говорит о себе, а forgetBot возвращает право сказать снова', async () => {
+    const { call } = fake({
+      [BOT_MESSAGE_METHOD]: () => {
+        throw new Error('BOT_NOT_FOUND')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'a', call, 'M2')
+    expect(about('бот не принял сообщение')).toHaveLength(2)
+    forgetBot('M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(3)
+  })
+
+  // ⚠ «Раз за жизнь процесса» уезжало бы за окно `make chat-log` (несколько часов при процессе,
+  // живущем сутками), и отчёт уверенно печатал бы «ни одного отказа бота» (находка ревью).
+  it('через час та же причина звучит снова — строка есть в любом окне отчёта', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-28T08:00:00Z'))
+    const { call } = fake({
+      [BOT_MESSAGE_METHOD]: () => {
+        throw new Error('BOT_NOT_FOUND')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    vi.setSystemTime(new Date('2026-09-28T08:59:00Z'))
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(1)
+    vi.setSystemTime(new Date('2026-09-28T09:00:01Z'))
+    await postChatMessage('chat1', 'c', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(2)
+  })
+
+  // ⚠ Постоянный отказ кэшируется, и дальше регистрация не зовётся вовсе. Без повтора на
+  // закэшированном пути причина прозвучала бы один раз — при первом сообщении после старта.
+  it('закэшированный постоянный отказ тоже напоминает о себе раз в час — с исходной причиной', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-28T08:00:00Z'))
+    const { call } = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('insufficient_scope: The request requires higher privileges than provided')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот недоступен на портале')).toHaveLength(1)
+    vi.setSystemTime(new Date('2026-09-28T09:30:00Z'))
+    await postChatMessage('chat1', 'c', call, 'M1')
+    const lines2 = about('бот недоступен на портале')
+    expect(lines2).toHaveLength(2)
+    expect(lines2[1]).toContain('higher privileges')
+  })
+
+  // ⚠ В строку лога идёт ОТВЕТ портала, а апстрим вправе процитировать то, что ему прислали
+  // (находка QA панели #776: голый `.message` проходил весь набор зелёным). Учётные данные
+  // вырезаются на обоих путях регистрации — временном и постоянном.
+  it('процитированные порталом учётные данные в лог не попадают', async () => {
+    const transient = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('socket hang up refresh_token=SECRET-ONE')
+      }
+    })
+    await postChatMessage('chat1', 'a', transient.call, 'M1')
+    const permanent = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('insufficient_scope: The request requires higher privileges than provided client_secret=SECRET-TWO')
+      }
+    })
+    await postChatMessage('chat1', 'a', permanent.call, 'M2')
+    const logged = lines.filter(l => l.includes('[chat]')).join('\n')
+    expect(logged).toContain('регистрация бота не удалась')
+    expect(logged).toContain('бот недоступен на портале')
+    expect(logged).not.toContain('SECRET-ONE')
+    expect(logged).not.toContain('SECRET-TWO')
+    expect(logged).toContain('[redacted]')
   })
 })

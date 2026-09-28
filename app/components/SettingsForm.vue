@@ -116,19 +116,10 @@ async function cancel(): Promise<void> {
   </div>
 
   <!-- Non-admin in the portal: warning only, no settings. -->
-  <div
+  <SettingsAdminOnly
     v-else-if="blocked"
-    class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col items-center justify-center gap-3 px-4 text-center"
     data-testid="admin-gate"
-  >
-    <!-- h2, а не h3: над формой стоит `h1` навбара страницы, и уровень не должен перескакивать. -->
-    <ProseH2 class="mb-0">
-      Настройки доступны только администратору
-    </ProseH2>
-    <ProseP accent="less">
-      Обратитесь к администратору вашего Bitrix24 — изменять параметры импорта и уведомлений может только он.
-    </ProseP>
-  </div>
+  />
 
   <!-- In portal, settings still loading. -->
   <div

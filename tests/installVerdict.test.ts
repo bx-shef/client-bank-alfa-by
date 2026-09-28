@@ -162,4 +162,25 @@ describe('смарт-процессы приложения в вердикте �
     // писать «не созданы» значило бы обвинять портал в том, что просто не доехало событие.
     expect(installVerdict({ ...base, smartProcess: '' }).level).toBe('ok')
   })
+
+  // Смарт-процессы на месте, а карточка элемента без клиента и реквизитов вашей компании — ровно
+  // жалоба владельца 2026-09-28. «Готово» на такой установке было бы неправдой (находка ревью #776).
+  it('раскладка карточки не применилась — degraded с действием «Настроить заново»', () => {
+    const v = installVerdict({ ...base, smartProcess: 'ok', cardLayout: false })
+    expect(v.level).toBe('degraded')
+    const issue = v.issues.find(i => i.title.includes('карточка'))
+    expect(issue, JSON.stringify(v.issues)).toBeTruthy()
+    expect(issue!.action).toContain('Настроить заново')
+  })
+
+  it('раскладка на месте или неизвестна — молчим', () => {
+    expect(installVerdict({ ...base, smartProcess: 'ok', cardLayout: true }).level).toBe('ok')
+    // Ответ старого backend без поля — «не знаем», а не «не удалось».
+    expect(installVerdict({ ...base, smartProcess: 'ok', cardLayout: null }).level).toBe('ok')
+  })
+
+  it('смарт-процессы не создались — о карточке не говорим отдельно', () => {
+    const v = installVerdict({ ...base, smartProcess: 'ошибка: crm.type.add failed', cardLayout: false })
+    expect(v.issues.filter(i => i.title.includes('карточка'))).toHaveLength(0)
+  })
 })

@@ -345,4 +345,16 @@ describe('install.vue — смарт-процессы создаются САМ�
     // …но молчать об этом нельзя: без смарт-процесса не ведётся реестр.
     expect(wrapper.text()).toContain('смарт-процессы')
   })
+
+  // Смарт-процессы созданы, а раскладка карточки не применилась: сервер отдаёт это флагом, и
+  // установка обязана его донести до вердикта, а не объявить «готово» (находка ревью #776).
+  it('раскладка карточки не применилась — вердикт говорит о карточке', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('setup-status')) return {}
+      return { ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true, cardConfigured: false }
+    })
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(wrapper.find('[data-testid="install-verdict"]').text()).toContain('карточка элемента «Платежи»')
+  })
 })

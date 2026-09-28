@@ -114,6 +114,29 @@ describe('ProvisionSpCard interaction', () => {
     expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('на месте')
   })
 
+  it('раскладка карточки не применилась → предупреждение, но успех остаётся успехом', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true, cardConfigured: false })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="provision-button"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="provision-warning"]').text()).toContain('карточки «Платежи»')
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('созданы')
+    expect(wrapper.emitted('provisioned')).toHaveLength(1)
+  })
+
+  // ⚠ Поля нет у ответа сервера старше правки (статика и backend выкатываются порознь): «не знаем»
+  // не должно читаться как «не удалось».
+  it('ответ без cardConfigured — без предупреждения', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: false })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="provision-button"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="provision-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toBe('Смарт-процессы уже были на месте.')
+  })
+
   it('404 больше не значит «отключено» — маршрут есть всегда', async () => {
     // ⚠ Ветку «отключена» убрали вместе с env-гейтом (2026-08-23): смарт-процесс «Платежи» это
     // реестр, а не опция, и режим приложения всегда «включено». Оставить прежний текст значило бы
@@ -172,5 +195,69 @@ describe('ProvisionSpCard — когда всё уже настроено', () =
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="provision-button"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="provision-ready"]').exists()).toBe(false)
+  })
+})
+
+// ⚠ Смарт-процессы уже созданы — главной кнопки нет, но ПОВТОР остаётся (замечание владельца
+// 2026-09-28): иначе исправленная раскладка карточки «Платежи» не дошла бы до порталов, где
+// смарт-процессы уже есть, — провижининг применяет её только при запуске.
+describe('ProvisionSpCard: смарт-процессы уже на месте', () => {
+  it('главной кнопки нет, «Настроить заново» — есть, и она предупреждает о цене', async () => {
+    markProvisioned()
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="provision-ready"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="provision-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="provision-rerun"]').exists()).toBe(true)
+    // Цена названа рядом с кнопкой: перевод на общую раскладку стирает личные настройки карточки.
+    expect(wrapper.find('[data-testid="provision-sp"]').text()).toContain('личные настройки этой карточки')
+  })
+
+  it('«Настроить заново» зовёт тот же провижининг и говорит, что карточка на месте', async () => {
+    markProvisioned()
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1046, distributionSpEtid: 1048, created: false, addedFields: 0, cardConfigured: true })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="provision-rerun"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(fetchMock).toHaveBeenCalledWith('/api/distribution/provision', expect.objectContaining({ method: 'POST' }))
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('раскладка карточки «Платежи» на месте')
+    expect(wrapper.emitted('provisioned')).toHaveLength(1)
+  })
+})
+
+// ⚠ Предупреждение про карточку НЕ показывается поверх ошибки (находка QA панели #776): сейчас
+// композабл сбрасывает одно, ставя другое, но гвард в разметке от этого не зависит — рефакторинг
+// композабла молча вывел бы рядом «не удалось настроить» и «раскладку применить не удалось».
+describe('ProvisionSpCard: ошибка важнее предупреждения', () => {
+  it('есть и ошибка, и предупреждение — видна только ошибка', async () => {
+    vi.resetModules()
+    vi.doMock('~/composables/useProvisionDistribution', async () => {
+      const { ref } = await import('vue')
+      return {
+        useProvisionDistribution: () => ({
+          provision: async () => {},
+          syncEnabled: () => {},
+          provisioning: ref(false),
+          error: ref('Не удалось настроить смарт-процессы'),
+          message: ref(''),
+          warning: ref('Раскладку карточки «Платежи» применить не удалось'),
+          cardConfigured: ref(false),
+          enabled: ref(true),
+          paymentSpEtid: ref(null),
+          distributionSpEtid: ref(null)
+        })
+      }
+    })
+    try {
+      const Card = (await import('~/components/ProvisionSpCard.vue')).default
+      const wrapper = await mountSuspended(Card)
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="provision-error"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="provision-warning"]').exists()).toBe(false)
+    } finally {
+      vi.doUnmock('~/composables/useProvisionDistribution')
+      vi.resetModules()
+    }
   })
 })

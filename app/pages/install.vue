@@ -150,6 +150,7 @@ const verdict = computed(() => installVerdict({
   trigger: triggerRegistered.value,
   bot: botRegistered.value,
   smartProcess: spProvisioned.value,
+  cardLayout: provisionSp.cardConfigured.value,
   backend: backendState.value
 }))
 // Раскрытие «Диагностики». ОБЯЗАТЕЛЬНО обычный ref под v-model, а не computed под :model-value:

@@ -10,13 +10,18 @@ import { paymentSpEtid, distributionSpEtid, smartProcessListPath } from '~/confi
 // Смарт-процессы распределения (#109 §9.1): состояние + кнопка настройки.
 //
 // Состояние читается СРАЗУ из настроек портала — их id уже хранятся там после провижининга, так что
-// отдельный запрос не нужен. Если оба на месте, кнопки «Настроить» нет вовсе: предлагать действие,
+// отдельный запрос не нужен. Если оба на месте, главной кнопки «Настроить» нет: предлагать действие,
 // которое уже выполнено, — значит заставлять гадать, надо ли его нажимать. Вместо неё — ссылки на
 // сами смарт-процессы, чтобы можно было заглянуть внутрь.
 //
+// ⚠ Но ПОВТОР остаётся — второстепенной кнопкой с объяснением, что она делает и чего стоит. Без него
+// исправленная раскладка карточки «Платежи» не дошла бы до порталов, где смарт-процессы уже созданы:
+// провижининг применяет её только при запуске, а запустить его там было нечем (замечание владельца
+// 2026-09-28 — в карточке не было ни клиента, ни реквизитов своей компании).
+//
 // Гейт админа продублирован здесь (без fail-open мигания), авторитет — на backend.
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
-const { provision, syncEnabled, provisioning, error, message, enabled, paymentSpEtid: freshPayment, distributionSpEtid: freshDistribution } = useProvisionDistribution()
+const { provision, syncEnabled, provisioning, error, message, warning, enabled, paymentSpEtid: freshPayment, distributionSpEtid: freshDistribution } = useProvisionDistribution()
 const chatSettings = useChatSettings()
 const slider = usePortalSlider()
 
@@ -122,6 +127,26 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
             @click="openSp($event, l.etid, l.href!)"
           >{{ l.label }}</a>
         </div>
+        <div class="space-y-2">
+          <!-- ⚠ Цена названа ЗДЕСЬ, рядом с кнопкой: перевод всех на общую раскладку удаляет личные
+               раскладки карточки. Платится она, только когда раскладка на портале не наша. -->
+          <p class="text-sm text-(--ui-color-base-2)">
+            В карточке элемента «Платежи» не видно клиента или реквизитов вашей компании? Настройте
+            заново: повтор ничего не дублирует — досоздаст недостающие поля и, если раскладка
+            карточки отличается от нашей, выставит её для всех сотрудников. Их личные настройки этой
+            карточки при этом сбросятся.
+          </p>
+          <B24Button
+            :loading="provisioning"
+            :disabled="provisioning"
+            :aria-busy="provisioning"
+            color="air-secondary-accent"
+            data-testid="provision-rerun"
+            @click="runProvision"
+          >
+            Настроить заново
+          </B24Button>
+        </div>
       </template>
 
       <template v-else>
@@ -170,6 +195,13 @@ async function openSp(event: MouseEvent, etid: number, href: string) {
           color="air-primary-success"
           :description="message"
           data-testid="provision-message"
+        />
+        <B24Alert
+          v-if="!error && warning"
+          color="air-primary-warning"
+          :description="warning"
+          class="mt-2"
+          data-testid="provision-warning"
         />
       </div>
     </div>
