@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BOT_MESSAGE_METHOD, forgetBot, resetBotCache, resolveBotId } from '../server/utils/chatBotSend'
 import { CHAT_MESSAGE_METHOD, notifyChatViaRest, postChatMessage } from '../server/utils/chatNotifyWrite'
 import { notifyUnmatchedViaRest } from '../server/utils/unmatchedNotify'
@@ -457,5 +457,67 @@ describe('аватар бота — иконка приложения (#496)', (
       return { result: { id: 100 } }
     }
     expect(await postChatMessage('chat1', 'привет', call, 'M-AV3')).toBe('100')
+  })
+})
+
+// ⚠ Жалоба владельца 2026-09-28: «бота вообще не вижу», сообщения и дела — от установившего. Три
+// пути отказа бота молчали НАВСЕГДА, и причину нельзя было прочитать нигде. Теперь каждый говорит в
+// лог — но РАЗ на портал за жизнь процесса, иначе сотни сообщений в день забили бы лог повтором.
+describe('молчащие отказы бота — в лог, один раз на портал', () => {
+  let lines: string[] = []
+  beforeEach(() => {
+    lines = []
+    vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+      lines.push(String(c))
+      return true
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+  const about = (needle: string) => lines.filter(l => l.includes('[chat]') && l.includes(needle))
+
+  it('временный сбой регистрации: причина в логе, повтор на следующем сообщении — без второй строки', async () => {
+    const { call } = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('socket hang up')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('регистрация бота не удалась')).toHaveLength(1)
+    expect(about('регистрация бота не удалась')[0]).toContain('socket hang up')
+  })
+
+  it('отказ отправки ботом без вложения — тоже в лог, раз на портал', async () => {
+    const { call } = fake({
+      [BOT_MESSAGE_METHOD]: () => {
+        throw new Error('BOT_NOT_FOUND')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(1)
+    expect(about('бот не принял сообщение')[0]).toContain('BOT_NOT_FOUND')
+  })
+
+  it('ответ регистрации без id — в лог, а не в тишину', async () => {
+    const { call } = fake({ 'imbot.v2.Bot.register': () => ({ result: { nothing: true } }) })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    expect(about('регистрацию бота без id')).toHaveLength(1)
+  })
+
+  it('каждый портал говорит о себе, а forgetBot возвращает право сказать снова', async () => {
+    const { call } = fake({
+      [BOT_MESSAGE_METHOD]: () => {
+        throw new Error('BOT_NOT_FOUND')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'a', call, 'M2')
+    expect(about('бот не принял сообщение')).toHaveLength(2)
+    forgetBot('M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(3)
   })
 })

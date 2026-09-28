@@ -21,6 +21,7 @@ import { hasAttachBlocks, type ChatAttach } from '../../app/utils/chatAttach'
 import { BOT_AVATAR_BASE64 } from './botAvatar'
 import { B24_CHAT_BOT } from '../../app/config/b24'
 import type { RestCall } from './companyLookup'
+import { describeUpstreamError } from './logSanitize'
 import { useServerLogger } from './serverLogger'
 
 const log = useServerLogger('chat')
@@ -53,9 +54,31 @@ function isAccessDenied(error: unknown): boolean {
   return `${(error as Error)?.message ?? ''}`.toLowerCase().includes('access_denied')
 }
 
+/**
+ * Отказы бота, о которых УЖЕ сказано в логе: ключ `<портал>|<вид>`.
+ *
+ * ⚠ Заведено по жалобе владельца 2026-09-28: «бота вообще не вижу», сообщения и дела — от имени
+ * установившего. Три пути отказа молчали НАВСЕГДА: временная ошибка регистрации, ответ регистрации
+ * без id и отказ отправки без вложения. Снаружи всё это неотличимо от «бот работает», а причину
+ * нельзя было прочитать нигде.
+ * ⚠ Раз на портал за жизнь процесса, а не на каждое сообщение: сообщений в чат на живом портале
+ * сотни в день, и безусловная строка забила бы лог повтором одной и той же причины.
+ */
+const reported = new Set<string>()
+
+/** Сказать в лог о причине, по которой сообщение уйдёт НЕ от бота, — один раз на портал и вид. */
+export function reportBotFallbackOnce(memberId: string, kind: 'register' | 'register-shape' | 'send', reason: string): void {
+  const key = `${memberId}|${kind}`
+  if (reported.has(key)) return
+  reported.add(key)
+  const what = kind === 'send' ? 'бот не принял сообщение' : kind === 'register' ? 'регистрация бота не удалась' : 'портал ответил на регистрацию бота без id'
+  log.info(`${what}, сообщение уйдёт от имени владельца токена: ${reason}`)
+}
+
 /** Exposed for tests — a module-level cache would otherwise leak between cases. */
 export function resetBotCache(): void {
   botIdByPortal.clear()
+  reported.clear()
 }
 
 /** Forget one portal — called on ONAPPUNINSTALL, where every other per-portal store is purged too.
@@ -64,6 +87,7 @@ export function resetBotCache(): void {
  *  how a store quietly stops being swept at all. */
 export function forgetBot(memberId: string): void {
   botIdByPortal.delete(memberId)
+  for (const key of reported) if (key.startsWith(`${memberId}|`)) reported.delete(key)
 }
 
 /**
@@ -94,6 +118,8 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
     if (id) {
       botIdByPortal.set(memberId, id)
       await pushBotProfile(id, call)
+    } else {
+      reportBotFallbackOnce(memberId, 'register-shape', JSON.stringify(resp?.result ?? null).slice(0, 200))
     }
     return id
   } catch (error) {
@@ -105,7 +131,8 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
       botIdByPortal.set(memberId, null)
       return null
     }
-    // Транзиентная ошибка: не кэшируем, следующая попытка спросит заново.
+    // Транзиентная ошибка: не кэшируем, следующая попытка спросит заново. Но и не молчим (см. `reported`).
+    reportBotFallbackOnce(memberId, 'register', describeUpstreamError(error))
     return null
   }
 }

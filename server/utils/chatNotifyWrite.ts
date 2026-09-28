@@ -13,7 +13,7 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import { buildChatMessage } from '../../app/utils/chatMessage'
-import { resolveBotId, sendAsBot } from './chatBotSend'
+import { reportBotFallbackOnce, resolveBotId, sendAsBot } from './chatBotSend'
 import { hasAttachBlocks, type ChatAttach, type ChatAttachment } from '../../app/utils/chatAttach'
 import { describeUpstreamError } from './logSanitize'
 import { useServerLogger } from './serverLogger'
@@ -121,8 +121,13 @@ async function deliver(
         // безусловная строка забила бы лог ровно тем, что чинить не нужно. С вложением всё
         // наоборот: действие редкое, ручное, и без этой строки неизвестно даже, КАКАЯ ступень
         // лестницы отвергла картинки — бот или владелец токена.
+        // ⚠ Без вложения — тоже говорим, но РАЗ НА ПОРТАЛ за жизнь процесса (2026-09-28): иначе
+        // «бот не работает» было не разобрать вовсе — сообщения шли от сотрудника, а причины не было
+        // нигде. Строка на каждое сообщение, наоборот, забила бы лог одним и тем же.
         if (hasAttachBlocks(attach)) {
           log.info(`бот не принял сообщение с вложением, пробуем от имени владельца токена: ${describeUpstreamError(e)}`)
+        } else {
+          reportBotFallbackOnce(memberId, 'send', describeUpstreamError(e))
         }
       }
     }

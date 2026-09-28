@@ -15,6 +15,12 @@
 #                    image link), i.e. nothing was even offered to the portal
 # From the outside both look identical («картинок нет»); they are fixed in different places.
 #
+# ⚠ WHO SIGNED THE MESSAGE (2026-09-28). The same log answers «why do messages come from the installer
+# and not from the bot»: every silent bot fallback is now logged once per portal per process
+# (registration failed / registration answered without an id / the bot send was refused), next to
+# the permanent «бот недоступен на портале» line. Payment messages are sent by the WORKER container,
+# the bank-invite by the BACKEND one — so both are read.
+#
 # ⚠ READ-ONLY. Touches neither the portal nor the bank, and prints no secrets: these log lines carry
 # an error code and a description, never a token (`describeUpstreamError` redacts credentials).
 #
@@ -28,9 +34,10 @@ COMPOSE=docker-compose.prod.yml
 echo "== Сообщения в чат: вложения и подпись (за $SINCE) =="
 echo
 
-# ⚠ The BACKEND service, not `app`. `make logs` tails nginx, where none of this appears — that
-# mistake is exactly what sent someone looking in the wrong place once already.
-log=$(docker compose -f "$COMPOSE" logs --since "$SINCE" --no-log-prefix backend 2>/dev/null)
+# ⚠ BACKEND and WORKER, not `app`. `make logs` tails nginx, where none of this appears — that
+# mistake is exactly what sent someone looking in the wrong place once already. The worker sends
+# every payment message, so reading the backend alone would miss the bot's refusals there.
+log=$(docker compose -f "$COMPOSE" logs --since "$SINCE" --no-log-prefix backend worker 2>/dev/null)
 
 if [ -z "${log:-}" ]; then
   echo "лог пуст за этот срок — увеличьте окно: SINCE=24h make chat-log"
@@ -71,6 +78,9 @@ if [ -n "${attach:-}" ]; then
   echo "ACCESS_DENIED    — REST-бот недоступен на тарифе портала (сообщение уйдёт от сотрудника)"
   echo "BOT_LIMIT_...    — на портале исчерпан лимит чат-ботов"
   echo "«бот не принял»  — завернул БОТ, дальше пробовали от имени владельца токена"
+  echo "«бот недоступен на портале» — постоянный отказ: нет права imbot, тариф или нет методов бота"
+  echo "                   на этой версии Битрикс24 (ERROR_METHOD_NOT_FOUND) — всё уйдёт от сотрудника"
+  echo "«регистрация бота не удалась» — временный сбой, попробуем снова на следующем сообщении"
   echo "«портал не принял вложение» — завернули ОБА маршрута, ушёл полный текст инструкции без картинок"
   echo
 fi
