@@ -1,6 +1,6 @@
 # Указатель документации
 
-> Last reviewed: 2026-09-27
+> Last reviewed: 2026-09-28
 
 Что где лежит и когда это читать. Документов много, и без такой таблицы половина из них
 недостижима: раньше на `APP_RATING.md`, `DEPENDABOT.md`, `REPORTING_KIT.md` и
@@ -50,7 +50,7 @@
 | [`DEPLOY_VIBECODE.md`](DEPLOY_VIBECODE.md) | альтернативный таргет: Битрикс24 Вайбкод Black Hole |
 | [`DEPLOY_BITRIXVM.md`](DEPLOY_BITRIXVM.md) | альтернативный таргет: рядом с порталом на виртуальной машине Битрикс24 |
 | [`CLIENT_VERSION.md`](CLIENT_VERSION.md) | своя версия приложения у клиента: сквозной чек-лист, свои регистрации в банках, что отзывать при уходе |
-| [`OPERATIONS.md`](OPERATIONS.md) | runbook: health, типовые аварии, откат, **бэкапы**, эскалация |
+| [`OPERATIONS.md`](OPERATIONS.md) | runbook: health, типовые аварии, сломанный выпуск, **бэкапы**, эскалация |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | телеметрия OpenTelemetry, что можно и нельзя класть в спаны |
 | [`PRIVACY.md`](PRIVACY.md) | что храним, сколько и как чистим (финансовые ПДн) |
 | [`REPO_SETUP_CHECKLIST.md`](REPO_SETUP_CHECKLIST.md) · [`DEPENDABOT.md`](DEPENDABOT.md) | защита `main`, CI, обновления зависимостей |
