@@ -530,7 +530,7 @@ pnpm generate     # сборка статики (nuxt generate, SSG) — то ж
   `tests/nuxt/appSlider.nuxt.test.ts` + `tests/nuxt/appSliderMiddleware.nuxt.test.ts` (чтение
   `place`, формы `PLACEMENT_OPTIONS`, отложенный редирект на гидратации).
   Страница `/settings` — оболочка (шапка с крестиком + механика закрытия) над той же `SettingsForm`;
-  `ProvisionSpCard` + `DistributionTab` живут внутри формы, секция «Смарт-процессы и распределение».
+  `ProvisionSpCard` + `DistributionTab` живут внутри формы, раздел «Смарт-процессы».
   Кнопка «Проверить настройки» в `ImportStatusBanner` эмитит `openSettings`.
 - **UI-контур распределения (#109 §9.3 #4, admin-only):** ⚠ **env-гейта БОЛЬШЕ НЕТ**
   (`DISTRIBUTION_PROVISION_ENABLED` удалён 2026-08-23, решение владельца: «наш режим приложения

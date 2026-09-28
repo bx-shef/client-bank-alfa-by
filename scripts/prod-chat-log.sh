@@ -16,9 +16,10 @@
 # From the outside both look identical («картинок нет»); they are fixed in different places.
 #
 # ⚠ WHO SIGNED THE MESSAGE (2026-09-28). The same log answers «why do messages come from the installer
-# and not from the bot»: every silent bot fallback is now logged once per portal per process
-# (registration failed / registration answered without an id / the bot send was refused), next to
-# the permanent «бот недоступен на портале» line. Payment messages are sent by the WORKER container,
+# and not from the bot»: every bot fallback is now logged at most once PER HOUR per portal and kind
+# (registration failed / registration answered without an id / the bot send was refused / the
+# cached permanent refusal «бот недоступен на портале»), so it shows up in any window in which
+# messages were sent at all. Payment messages are sent by the WORKER container,
 # the bank-invite by the BACKEND one — so both are read.
 #
 # ⚠ READ-ONLY. Touches neither the portal nor the bank, and prints no secrets: these log lines carry
