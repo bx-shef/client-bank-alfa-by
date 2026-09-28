@@ -134,7 +134,7 @@ export async function handleSendBankInvite(deps: InviteSendDeps, input: InviteSe
       return { status: 503, body: { error: ALFA_CLIENT_ID_MISSING } }
     }
     ttlMin = BANK_KEY_GRANT_TTL_HOURS * 60
-    // Шаги со снимками уходят вложением, а в тексте остаются вступление, ссылка и предупреждения;
+    // Шаги со снимками уходят вложением (ссылка — в шаге 6), а в тексте — вступление и примечания;
     // полный текст едет рядом — на случай, когда портал вложение отвергнет.
     const guide = buildAlfaInviteGuide(alfa, deps.siteUrl())
     if (guide) {
