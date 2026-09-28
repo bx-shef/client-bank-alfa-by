@@ -30,11 +30,13 @@ function isSendableLink(url: string): boolean {
 }
 
 /** Домен годной к отправке ссылки — его называем в тексте ссылки, — либо `null`, если ссылку слать
- *  нельзя. Одна копия правила на оба банка: две разошлись бы молча. */
+ *  нельзя. Одна копия правила на оба банка: две разошлись бы молча.
+ *  ⚠ Квадратные скобки из домена убираются: `URL` отдаёт IPv6-адрес как `[::1]`, и скобка в тексте
+ *  внутри `[URL=…]…[/URL]` закрыла бы тег раньше времени (находка ревью безопасности). */
 function sendableLinkHost(url: string): string | null {
   if (!isSendableLink(url)) return null
   try {
-    return new URL(url).hostname
+    return new URL(url).hostname.replace(/[[\]]/g, '') || null
   } catch {
     return null
   }
@@ -151,7 +153,7 @@ export const ALFA_BUSINESS_ONLINE_HOST = new URL(ALFA_BUSINESS_ONLINE_URL).hostn
  */
 function alfaKeySteps(clientId: string, link: string, host: string): string[][] {
   return [
-    [`1. Войдите в [URL=${ALFA_BUSINESS_ONLINE_URL}]${ALFA_BUSINESS_ONLINE_NAME} (${ALFA_BUSINESS_ONLINE_HOST})[/URL].`],
+    [`1. Войдите в [URL=${bbLinkTarget(ALFA_BUSINESS_ONLINE_URL)}]${ALFA_BUSINESS_ONLINE_NAME} (${ALFA_BUSINESS_ONLINE_HOST})[/URL].`],
     ['2. [B]Настройки[/B] → вкладка [B]Open API[/B] → кнопка [B]«Сгенерировать ключ API»[/B].'],
     [
       '3. Заполните форму [B]«Генерация ключа API»[/B]:',
@@ -237,7 +239,8 @@ export interface GuideShot {
  * (пиксели те же), второй — байт в байт.
  *
  * ⚠ На втором снимке виден НАШ `client_id` — тот же, что сообщение называет текстом. Клон со
- * своим `client_id` обязан заменить снимки своими, иначе картинка разойдётся с текстом.
+ * своим `client_id` обязан заменить снимки своими, иначе картинка разойдётся с текстом — и в чате,
+ * и на экране `/bank-key`, где те же снимки стоят рядом с полем Client ID.
  * ⚠ Идентификатор ключа на третьем снимке замаскирован владельцем; счетов, УНП и имён на снимках
  * нет. Это важно: репозиторий публичный, и `public/guide/` уезжает в него как есть.
  *
