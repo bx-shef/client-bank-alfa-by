@@ -28,10 +28,14 @@ vi.mock('~/composables/useB24', async () => {
   }
 })
 
-function mockSettings() {
+/** `chatReady` — выбран чат уведомлений: без него `/app` в портале показывает «не настроено»
+ *  вместо рабочего экрана, и полосы статуса нет вовсе. */
+function mockSettings(chatReady = false) {
+  const base = defaultPortalSettings()
+  if (chatReady) base.chat.dialogId = 'chat1'
   vi.doMock('~/composables/useChatSettings', () => ({
     useChatSettings: () => ({
-      settings: reactive(defaultPortalSettings()),
+      settings: reactive(base),
       enabled: ref(true),
       loading: ref(false),
       saving: ref(false),
@@ -50,6 +54,7 @@ function mockSettings() {
 
 afterEach(() => {
   vi.doUnmock('~/composables/useChatSettings')
+  vi.doUnmock('~/composables/useImportStatus')
   vi.resetModules()
   portal.inFrame = true
   portal.isAdmin = false
@@ -69,8 +74,19 @@ async function mountSettings() {
   return w
 }
 
-async function mountApp() {
-  mockSettings()
+/** Последний прогон упал — полоса статуса предлагает «Проверить настройки» (#775). */
+function mockFailedImport() {
+  vi.doMock('~/composables/useImportStatus', () => ({
+    useImportStatus: () => ({
+      status: ref({ state: 'error', lastSyncAt: null, operations: 0, activitiesCreated: 0, chatNotified: 0, errors: ['портал не ответил'] }),
+      loading: ref(false),
+      refresh: async () => {}
+    })
+  }))
+}
+
+async function mountApp(chatReady = false) {
+  mockSettings(chatReady)
   const page = (await import('~/pages/app.vue')).default
   const w = await mountSuspended(page, { route: '/app?preview=1' })
   await flushPromises()
@@ -118,6 +134,22 @@ describe('/app: кнопка «Настройки» — только тому, �
     portal.inFrame = false
     const w = await mountApp()
     expect(w.find('[data-testid="open-settings"]').exists()).toBe(true)
+  })
+
+  // ⚠ Полоса статуса проверяла флаг сама, но передачу флага страницей не проверяло ничто (находка
+  // QA панели #776): забытый `:can-open-settings` возвращал не-админу действие, ведущее в отказ.
+  it('упавший прогон: «Проверить настройки» в полосе — админу, не-админу нет', async () => {
+    mockFailedImport()
+    const nonAdmin = await mountApp(true)
+    expect(nonAdmin.text()).toContain('портал не ответил')
+    expect(nonAdmin.text()).not.toContain('Проверить настройки')
+
+    vi.resetModules()
+    mockFailedImport()
+    portal.isAdmin = true
+    const admin = await mountApp(true)
+    expect(admin.text()).toContain('портал не ответил')
+    expect(admin.text()).toContain('Проверить настройки')
   })
 })
 

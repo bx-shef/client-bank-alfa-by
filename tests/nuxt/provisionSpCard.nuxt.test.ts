@@ -224,3 +224,40 @@ describe('ProvisionSpCard: смарт-процессы уже на месте', 
     expect(wrapper.emitted('provisioned')).toHaveLength(1)
   })
 })
+
+// ⚠ Предупреждение про карточку НЕ показывается поверх ошибки (находка QA панели #776): сейчас
+// композабл сбрасывает одно, ставя другое, но гвард в разметке от этого не зависит — рефакторинг
+// композабла молча вывел бы рядом «не удалось настроить» и «раскладку применить не удалось».
+describe('ProvisionSpCard: ошибка важнее предупреждения', () => {
+  it('есть и ошибка, и предупреждение — видна только ошибка', async () => {
+    vi.resetModules()
+    vi.doMock('~/composables/useProvisionDistribution', async () => {
+      const { ref } = await import('vue')
+      return {
+        useProvisionDistribution: () => ({
+          provision: async () => {},
+          syncEnabled: () => {},
+          provisioning: ref(false),
+          error: ref('Не удалось настроить смарт-процессы'),
+          message: ref(''),
+          warning: ref('Раскладку карточки «Платежи» применить не удалось'),
+          cardConfigured: ref(false),
+          enabled: ref(true),
+          paymentSpEtid: ref(null),
+          distributionSpEtid: ref(null)
+        })
+      }
+    })
+    try {
+      const Card = (await import('~/components/ProvisionSpCard.vue')).default
+      const wrapper = await mountSuspended(Card)
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('[data-testid="provision-error"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="provision-warning"]').exists()).toBe(false)
+    } finally {
+      vi.doUnmock('~/composables/useProvisionDistribution')
+      vi.resetModules()
+    }
+  })
+})

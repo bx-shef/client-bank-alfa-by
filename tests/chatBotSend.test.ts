@@ -560,4 +560,28 @@ describe('молчащие отказы бота — в лог, не чаще р
     expect(lines2).toHaveLength(2)
     expect(lines2[1]).toContain('higher privileges')
   })
+
+  // ⚠ В строку лога идёт ОТВЕТ портала, а апстрим вправе процитировать то, что ему прислали
+  // (находка QA панели #776: голый `.message` проходил весь набор зелёным). Учётные данные
+  // вырезаются на обоих путях регистрации — временном и постоянном.
+  it('процитированные порталом учётные данные в лог не попадают', async () => {
+    const transient = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('socket hang up refresh_token=SECRET-ONE')
+      }
+    })
+    await postChatMessage('chat1', 'a', transient.call, 'M1')
+    const permanent = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('insufficient_scope: The request requires higher privileges than provided client_secret=SECRET-TWO')
+      }
+    })
+    await postChatMessage('chat1', 'a', permanent.call, 'M2')
+    const logged = lines.filter(l => l.includes('[chat]')).join('\n')
+    expect(logged).toContain('регистрация бота не удалась')
+    expect(logged).toContain('бот недоступен на портале')
+    expect(logged).not.toContain('SECRET-ONE')
+    expect(logged).not.toContain('SECRET-TWO')
+    expect(logged).toContain('[redacted]')
+  })
 })
