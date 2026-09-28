@@ -29,6 +29,17 @@ function isSendableLink(url: string): boolean {
   return /^https:\/\/[^\s/]+\/\S*$/i.test(url.trim())
 }
 
+/** Домен годной к отправке ссылки — его называем в тексте ссылки, — либо `null`, если ссылку слать
+ *  нельзя. Одна копия правила на оба банка: две разошлись бы молча. */
+function sendableLinkHost(url: string): string | null {
+  if (!isSendableLink(url)) return null
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+}
+
 export interface PriorInviteInput {
   /** Готовый authorize-URL банка. */
   link: string
@@ -60,13 +71,8 @@ function bbLinkTarget(url: string): string {
  */
 export function buildPriorInvite(input: PriorInviteInput): string | null {
   const link = (input.link ?? '').trim()
-  if (!isSendableLink(link)) return null
-  let host: string
-  try {
-    host = new URL(link).hostname
-  } catch {
-    return null
-  }
+  const host = sendableLinkHost(link)
+  if (!host) return null
   const ttl = Number.isFinite(input.ttlMin) && input.ttlMin > 0 ? Math.round(input.ttlMin) : 0
   // ⚠ Вид сообщения — текст владельца дословно (2026-09-28): пустая строка между блоками и значки
   // чата `:!:` (важное) и `:idea:` (подсказка) — портал рисует их иконками, это видно на снимке
@@ -110,13 +116,8 @@ function alfaInviteFields(input: AlfaInviteInput): { clientId: string, link: str
   const clientId = (input.clientId ?? '').trim()
   if (!clientId || /\s/.test(clientId)) return null
   const link = (input.link ?? '').trim()
-  if (!isSendableLink(link)) return null
-  let host: string
-  try {
-    host = new URL(link).hostname
-  } catch {
-    return null
-  }
+  const host = sendableLinkHost(link)
+  if (!host) return null
   const ttl = Number.isFinite(input.ttlHours) && input.ttlHours > 0 ? Math.round(input.ttlHours) : 0
   return { clientId, link, host, ttl }
 }
@@ -124,6 +125,10 @@ function alfaInviteFields(input: AlfaInviteInput): { clientId: string, link: str
 /** Где владелец счёта выпускает ключ — ссылка шага 1 и в сообщении, и на экране `/bank-key`
  *  (замечание владельца 2026-09-28: «Войдите в Альфа Бизнес Онлайн — это ссылка»). */
 export const ALFA_BUSINESS_ONLINE_URL = 'https://online.alfabank.by/'
+export const ALFA_BUSINESS_ONLINE_NAME = 'Альфа Бизнес Онлайн'
+/** ⚠ Домен НАЗВАН в тексте ссылки — то же правило, что у ссылки Приора: по ней человек вводит
+ *  пароль от интернет-банка, а на телефоне навести мышь и посмотреть адрес нечем. */
+export const ALFA_BUSINESS_ONLINE_HOST = new URL(ALFA_BUSINESS_ONLINE_URL).hostname
 
 /**
  * Шаги выпуска ключа — ОДИН источник на обе раскладки сообщения. Шаг — это строки: у шага 3 их
@@ -137,19 +142,22 @@ export const ALFA_BUSINESS_ONLINE_URL = 'https://online.alfabank.by/'
  * 2026-09-28). Прежде с картинками она стояла в тексте сообщения, НАД вложением, и дойдя до шага 6,
  * человек листал сообщение вверх. Адрес длинный и несёт подписанный грант — он спрятан под текст,
  * а хост назван, как у Приора: на этом экране вводят ключ от счёта. Квадратные скобки параметров
- * кодируются (`bbLinkTarget`), иначе закрыли бы тег.
+ * кодируются (`bbLinkTarget`), иначе закрыли бы тег. ⚠ Закодированные ключи `params%5B…%5D`
+ * живьём НЕ проверены: прежде ссылка уходила голой строкой с сырыми скобками, а у Приора скобок в
+ * адресе нет вовсе. Проверяется одним кликом по приглашению, отправленному себе.
  * ⚠ Шаг 3 — по полю формы на строку (замечание владельца: «всё в одну кучу»); подписи полей —
- * дословно как в форме «Генерация ключа API».
+ * дословно как в форме «Генерация ключа API». Строки БЕЗ точки с запятой в конце: в чате нет кнопки
+ * «скопировать», человек выделяет client_id мышью, и знак вплотную к нему уехал бы в выделение.
  */
 function alfaKeySteps(clientId: string, link: string, host: string): string[][] {
   return [
-    [`1. Войдите в [URL=${ALFA_BUSINESS_ONLINE_URL}]Альфа Бизнес Онлайн[/URL].`],
+    [`1. Войдите в [URL=${ALFA_BUSINESS_ONLINE_URL}]${ALFA_BUSINESS_ONLINE_NAME} (${ALFA_BUSINESS_ONLINE_HOST})[/URL].`],
     ['2. [B]Настройки[/B] → вкладка [B]Open API[/B] → кнопка [B]«Сгенерировать ключ API»[/B].'],
     [
       '3. Заполните форму [B]«Генерация ключа API»[/B]:',
-      '• [B]НАЗВАНИЕ[/B] — любое понятное, например «Подключение к Б24»;',
-      `• [B]CLIENT ID[/B] — ${clientId};`,
-      '• [B]ТИП КЛЮЧА[/B] — [B]Постоянный ключ[/B].'
+      '• [B]НАЗВАНИЕ[/B] — любое понятное, например «Подключение к Б24»',
+      `• [B]CLIENT ID[/B] — ${clientId}`,
+      '• [B]ТИП КЛЮЧА[/B] — [B]Постоянный ключ[/B]'
     ],
     ['4. Согласитесь с условиями и нажмите [B]«Сгенерировать ключ»[/B].'],
     ['5. Раскройте строку ключа и нажмите [B]«Скопировать ключ»[/B].'],

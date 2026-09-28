@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useBankKeyScreen } from '~/composables/useBankKeyScreen'
 import { copyToClipboard } from '~/utils/clipboard'
-import { ALFA_BUSINESS_ONLINE_URL } from '~/utils/bankConnectInvite'
+import { ALFA_BUSINESS_ONLINE_HOST, ALFA_BUSINESS_ONLINE_NAME, ALFA_BUSINESS_ONLINE_URL } from '~/utils/bankConnectInvite'
 import { pageTitle } from '~/utils/landing'
 
 // Экран ВЛАДЕЛЬЦА СЧЁТА: он выпустил ключ API в кабинете банка и вставляет его сюда (#19).
@@ -29,7 +29,9 @@ const token = ref('')
 const clientIdCopied = ref(false)
 // Подпись ссылки шага 1 — выражением, а не текстом в разметке: у многострочного элемента текст
 // внутри получил бы пробелы по краям, и перед точкой после ссылки встал бы лишний пробел.
-const bankOnlineName = 'Альфа Бизнес Онлайн'
+// ⚠ Домен назван в подписи — по этой ссылке вводят пароль от интернет-банка (то же правило, что в
+// сообщении чата).
+const bankOnlineLabel = `${ALFA_BUSINESS_ONLINE_NAME} (${ALFA_BUSINESS_ONLINE_HOST})`
 
 onMounted(async () => {
   await b24.init().catch(() => {})
@@ -90,9 +92,10 @@ async function onSubmit() {
         <!-- Инструкция ПОВТОРЯЕТСЯ здесь, а не только в сообщении чата: человек мог дойти сюда
              через день и сообщение уже не искать. Надписи — дословно как в кабинете банка.
              ⚠ Снимки кабинета — те же, что во вложении сообщения, и после тех же шагов
-             (`GuideShotImage` читает общий манифест). Номера шагов здесь совпадают с номерами в
+             (`AlfaKeyShotImage` читает общий манифест). Номера шагов здесь совпадают с номерами в
              сообщении; компонент стоит в КАЖДОМ шаге, чтобы новый снимок не требовал правки
-             разметки. -->
+             разметки. Надписи кабинета (всё, что выделено жирным) обязаны совпадать с шагами
+             сообщения — это держит тест. -->
         <div
           class="rounded-md bg-(--ui-color-base-8) p-3 text-sm text-(--ui-color-base-2)"
           data-testid="key-steps"
@@ -103,67 +106,70 @@ async function onSubmit() {
           <ol class="ml-4 list-decimal space-y-3">
             <li>
               Войдите в
+              <!-- ⚠ Цвет задан явно: штатный цвет ссылки на белом фоне даёт 4.21:1 при пороге 4.5:1
+                   (`blue-80` — 5.04:1). В тёмной теме штатный проходит (4.9:1) и остаётся. -->
               <B24Link
                 :href="ALFA_BUSINESS_ONLINE_URL"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="font-semibold"
+                class="font-semibold text-(--ui-color-blue-80) dark:text-(--ui-color-design-selection-content)"
                 data-testid="key-bank-link"
               >
-                {{ bankOnlineName }}
+                {{ bankOnlineLabel }}
               </B24Link>.
-              <GuideShotImage :step="1" />
+              <AlfaKeyShotImage :step="1" />
             </li>
             <li>
               <b>Настройки</b> → вкладка <b>Open API</b> → кнопка <b>«Сгенерировать ключ API»</b>.
-              <GuideShotImage :step="2" />
+              <AlfaKeyShotImage :step="2" />
             </li>
             <li>
               Заполните форму <b>«Генерация ключа API»</b>:
               <!-- ⚠ По полю формы на строку — как в сообщении чата (замечание владельца 2026-09-28:
                    одной строкой три поля читались «в одну кучу»). -->
+              <!-- ⚠ Client ID — ПРЯМО В ШАГЕ, а не «значение ниже» (находка ревью): под шагами стоят
+                   два снимка во всю ширину, и поле с кнопкой копирования уезжало на ~1100 px вниз. -->
               <ul class="mt-1 ml-4 list-disc space-y-0.5">
-                <li><b>НАЗВАНИЕ</b> — любое понятное, например «Подключение к Б24»;</li>
-                <li><b>CLIENT ID</b> — значение ниже;</li>
-                <li><b>ТИП КЛЮЧА</b> — <b>Постоянный ключ</b>.</li>
+                <li><b>НАЗВАНИЕ</b> — любое понятное, например «Подключение к Б24»</li>
+                <li>
+                  <b>CLIENT ID</b> — скопируйте значение:
+                  <div
+                    v-if="screen.clientId.value"
+                    class="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center"
+                    data-testid="key-client-id-field"
+                  >
+                    <B24Input
+                      :model-value="screen.clientId.value"
+                      readonly
+                      aria-label="Client ID для кабинета банка"
+                      class="w-full font-mono text-xs"
+                      data-testid="key-client-id"
+                      @focus="(e: FocusEvent) => (e.target as HTMLInputElement)?.select()"
+                    />
+                    <B24Button
+                      color="air-secondary-accent"
+                      class="shrink-0"
+                      data-testid="key-copy-client-id"
+                      @click="onCopyClientId"
+                    >
+                      {{ clientIdCopied ? 'Скопировано' : 'Скопировать' }}
+                    </B24Button>
+                  </div>
+                </li>
+                <li><b>ТИП КЛЮЧА</b> — <b>Постоянный ключ</b></li>
               </ul>
-              <GuideShotImage :step="3" />
+              <AlfaKeyShotImage :step="3" />
             </li>
             <li>
               Согласитесь с условиями и нажмите <b>«Сгенерировать ключ»</b>.
-              <GuideShotImage :step="4" />
+              <AlfaKeyShotImage :step="4" />
             </li>
             <li>
               Раскройте строку ключа, нажмите <b>«Скопировать ключ»</b> — и вставьте его в поле ниже.
-              <GuideShotImage :step="5" />
+              <AlfaKeyShotImage :step="5" />
             </li>
           </ol>
         </div>
-
-        <B24FormField
-          v-if="screen.clientId.value"
-          label="Client ID для кабинета банка"
-          description="Скопируйте и вставьте в поле CLIENT ID при генерации ключа."
-          data-testid="key-client-id-field"
-        >
-          <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <B24Input
-              :model-value="screen.clientId.value"
-              readonly
-              class="w-full font-mono text-xs"
-              data-testid="key-client-id"
-              @focus="(e: FocusEvent) => (e.target as HTMLInputElement)?.select()"
-            />
-            <B24Button
-              color="air-secondary-accent"
-              class="shrink-0"
-              data-testid="key-copy-client-id"
-              @click="onCopyClientId"
-            >
-              {{ clientIdCopied ? 'Скопировано' : 'Скопировать' }}
-            </B24Button>
-          </div>
-        </B24FormField>
 
         <B24FormField
           label="Ключ API"
