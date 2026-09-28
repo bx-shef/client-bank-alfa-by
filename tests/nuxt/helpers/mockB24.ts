@@ -42,6 +42,12 @@ export interface MockB24Options {
    * смарт-процессов), пойдёт в сеть по-настоящему.
    */
   accessToken?: string
+  /**
+   * Рукопожатие завершилось, а реактивный флаг ещё нет: `get()` уже отдаёт фрейм, `isInit()` — ещё
+   * `false`. Ровно так ведёт себя настоящий `useB24` между `await init()` и ближайшим `nextTick`
+   * (#775): код, читающий только `isInit()` в этот момент, принимает портал за «снаружи».
+   */
+  isInitLags?: boolean
 }
 
 /**
@@ -103,7 +109,7 @@ export function makeMockB24(opts: MockB24Options = {}): ReturnType<typeof useB24
     closeSlider: (opts.closeSlider ?? vi.fn(async () => {})) as unknown as ReturnType<typeof useB24>['closeSlider'],
     openMessenger: (opts.openMessenger ?? vi.fn(async () => true)) as unknown as ReturnType<typeof useB24>['openMessenger'],
     set: () => ok,
-    isInit: inFrame,
+    isInit: () => inFrame() && !opts.isInitLags,
     targetOrigin: () => 'https://example.bitrix24.by',
     // Пусто по умолчанию (большинству тестов права не важны). Тест вердикта установки ЗАДАЁТ их
     // явно: с пустым списком «недовыданных прав» не бывает, и degraded-ветка не проверялась бы.

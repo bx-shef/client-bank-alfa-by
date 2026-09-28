@@ -11,12 +11,20 @@ import { defaultPortalSettings } from '~/utils/settings'
 // ⚠ Три случая, и третий несущий: вне портала (`?preview=1`) админа не спросить, а визуальные
 // эталоны снимаются именно там — кнопка и меню обязаны остаться.
 
-const portal = { inFrame: true, isAdmin: false }
+const portal = { inFrame: true, isAdmin: false, lag: false, hangTitle: false }
 
 vi.mock('~/composables/useB24', async () => {
   const { makeMockB24 } = await import('./helpers/mockB24')
+  const { vi: v } = await import('vitest')
   return {
-    useB24: () => makeMockB24({ isInit: () => portal.inFrame, isAdmin: portal.isAdmin, sliderMode: true })
+    useB24: () => makeMockB24({
+      isInit: () => portal.inFrame,
+      isAdmin: portal.isAdmin,
+      sliderMode: true,
+      isInitLags: portal.lag,
+      // Портал, который не отвечает на `setTitle`: промис не завершается никогда.
+      ...(portal.hangTitle ? { setTitle: v.fn(() => new Promise(() => {})) } : {})
+    })
   }
 })
 
@@ -45,6 +53,8 @@ afterEach(() => {
   vi.resetModules()
   portal.inFrame = true
   portal.isAdmin = false
+  portal.lag = false
+  portal.hangTitle = false
 })
 
 async function mountSettings() {
@@ -108,5 +118,40 @@ describe('/app: кнопка «Настройки» — только тому, �
     portal.inFrame = false
     const w = await mountApp()
     expect(w.find('[data-testid="open-settings"]').exists()).toBe(true)
+  })
+})
+
+// ⚠ Две гонки, найденные ревью #776. Обе возвращали не-админу меню разделов — то есть ровно дефект
+// #775, — а тесты выше их не видели: мок отвечал синхронно и сразу.
+describe('гонки проверки админа (#775)', () => {
+  // Флаг рукопожатия в настоящем `useB24` выставляется в `nextTick`; прочитанный раньше, он
+  // объявлял бы портал «снаружи», а снаружи настройки открыты всем.
+  it('флаг рукопожатия ещё не выставлен — не-админ всё равно получает отказ', async () => {
+    portal.lag = true
+    const w = await mountSettings()
+    expect(w.find('[data-testid="settings-admin-only"]').exists()).toBe(true)
+    expect(w.find('[data-testid="settings-nav"]').exists()).toBe(false)
+  })
+
+  it('флаг рукопожатия ещё не выставлен — кнопки настроек на /app нет', async () => {
+    portal.lag = true
+    const w = await mountApp()
+    expect(w.find('[data-testid="open-settings"]').exists()).toBe(false)
+  })
+
+  // Проверка отмечалась пройденной только после `setTitle`, а портал может с ответом не спешить:
+  // всё это время страница рисовала меню разделов.
+  it('портал молчит на setTitle — отказ всё равно показан сразу', async () => {
+    portal.hangTitle = true
+    const w = await mountSettings()
+    expect(w.find('[data-testid="settings-admin-only"]').exists()).toBe(true)
+    expect(w.find('[data-testid="settings-nav"]').exists()).toBe(false)
+  })
+
+  // Отказ — единственный заголовок экрана: h2 без h1 ломал бы дерево заголовков диктору.
+  it('на странице отказа заголовок — h1', async () => {
+    const w = await mountSettings()
+    expect(w.find('[data-testid="settings-admin-only"] h1').exists()).toBe(true)
+    expect(w.find('[data-testid="settings-admin-only"] h2').exists()).toBe(false)
   })
 })

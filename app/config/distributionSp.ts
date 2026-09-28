@@ -227,6 +227,37 @@ export function buildPaymentCardConfigCall(paymentSp: SpRef): { method: string, 
   }
 }
 
+/** Прочитать ОБЩУЮ раскладку карточки реестра — чтобы не перезаписывать её, если она уже наша. */
+export function buildPaymentCardGetCall(paymentSp: SpRef): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.details.configuration.get',
+    params: { entityTypeId: paymentSp.entityTypeId, scope: 'C' }
+  }
+}
+
+/**
+ * Подпись раскладки для сравнения: разделы и поля ПО ПОРЯДКУ, без подписей и флагов показа.
+ *
+ * ⚠ Зачем сравнивать вообще (находка ревью #776): перевод всех на общую раскладку УДАЛЯЕТ личные
+ * раскладки сотрудников, а провижининг идёт и сам — при каждой установке и переустановке
+ * приложения. Без сравнения любая переустановка (а её просят ради новых прав) молча стирала бы
+ * бухгалтерам их настройки карточки. С ним цена платится один раз — когда раскладка на портале не
+ * наша (прежняя версия приложения или её поменяли руками).
+ * ⚠ Имена — без учёта регистра: портал возвращает их так, как принял, но форма имени UF-поля уже
+ * однажды оказалась не той, какой её создавали. Не массив ⇒ `null`: «раскладки нет» и «не смогли
+ * прочитать» одинаково означают «выставить».
+ */
+export function cardLayoutSignature(data: unknown): string | null {
+  if (!Array.isArray(data)) return null
+  return data.map((section) => {
+    const s = section as { name?: unknown, elements?: unknown }
+    const names = Array.isArray(s.elements)
+      ? s.elements.map(e => String((e as { name?: unknown })?.name ?? '').toUpperCase())
+      : []
+    return `${String(s.name ?? '').toUpperCase()}:${names.join(',')}`
+  }).join('|')
+}
+
 /**
  * Довести общую раскладку карточки реестра до ВСЕХ сотрудников.
  *

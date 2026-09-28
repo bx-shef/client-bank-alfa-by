@@ -5,12 +5,25 @@
 //
 // ⚠ Это подача, а не граница доступа: запись настроек и все админские маршруты закрыты на
 // сервере (`profile.ADMIN`, список держит `tests/adminGatedRoutes.test.ts`).
+//
+// ⚠ Уровень заголовка зависит от места: внутри формы над ним стоит заголовок страницы, а на
+// `/settings` отказ — ЕДИНСТВЕННЫЙ заголовок экрана, и h2 без h1 ломал бы дерево заголовков для
+// экранного диктора (находка ревью).
+withDefaults(defineProps<{ level?: 1 | 2 }>(), { level: 2 })
 </script>
 
 <template>
   <div class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
-    <!-- h2, а не h3: над ним стоит заголовок страницы, и уровень не должен перескакивать. -->
-    <ProseH2 class="mb-0">
+    <ProseH1
+      v-if="level === 1"
+      class="mb-0"
+    >
+      Настройки доступны только администратору
+    </ProseH1>
+    <ProseH2
+      v-else
+      class="mb-0"
+    >
       Настройки доступны только администратору
     </ProseH2>
     <ProseP accent="less">

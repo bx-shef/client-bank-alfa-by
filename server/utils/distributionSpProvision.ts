@@ -14,6 +14,8 @@ import {
   DISTRIBUTION_SP_TITLE,
   buildPaymentCardConfigCall,
   buildPaymentCardForceCommonCall,
+  buildPaymentCardGetCall,
+  cardLayoutSignature,
   PAYMENT_SP_FIELDS,
   PAYMENT_SP_TITLE,
   buildDistributionSpCreateCall,
@@ -223,17 +225,33 @@ export async function provisionDistributionSp(call: RestCall, known: KnownSpIds 
   //
   // ⚠ Раскладка считается применённой, только когда дошла до ВСЕХ: общая настройка без
   // `forceCommonScopeForAll` не видна тем, кто выбрал раскладку «для себя» (замер — у билдера).
-  // Оба вызова идут при КАЖДОМ запуске, а не только при создании: повторный запуск — единственный
-  // способ довести исправленную раскладку до портала, где смарт-процесс уже есть.
+  //
+  // ⚠ Но сначала — СРАВНЕНИЕ с тем, что уже стоит: перевод всех на общую УДАЛЯЕТ личные раскладки,
+  // а провижининг идёт и сам, при каждой установке и переустановке. Раскладка уже наша ⇒ не
+  // трогаем ничего, и чьи-то личные настройки карточки переживают переустановку. Не наша (прежняя
+  // версия приложения, чужая правка) или прочитать не вышло ⇒ выставляем и переводим всех — так
+  // исправление доходит и до порталов, где смарт-процесс уже есть.
   let cardConfigured = false
+  let cardStep = 'set'
   try {
     const cfg = buildPaymentCardConfigCall(payment.ref)
-    await call(cfg.method, cfg.params)
-    const force = buildPaymentCardForceCommonCall(payment.ref)
-    await call(force.method, force.params)
-    cardConfigured = true
+    const read = buildPaymentCardGetCall(payment.ref)
+    const current = await call(read.method, read.params).catch(() => null)
+    const applied = cardLayoutSignature((current as { result?: unknown } | null)?.result)
+    if (applied !== null && applied === cardLayoutSignature(cfg.params.data)) {
+      cardConfigured = true
+    } else {
+      await call(cfg.method, cfg.params)
+      cardStep = 'forceCommonScopeForAll'
+      const force = buildPaymentCardForceCommonCall(payment.ref)
+      await call(force.method, force.params)
+      cardConfigured = true
+    }
   } catch (e) {
-    log.warning(`card layout not applied for payment SP: ${(e as Error)?.message ?? e}`)
+    // ⚠ Шаг назван: отказ `set` оставляет карточку прежней у всех, а отказ перевода — только у
+    // тех, кто выбрал раскладку «для себя». Чинятся они одинаково (повтор), но по логу без шага
+    // было бы не понять, дошла ли новая раскладка хоть до кого-то.
+    log.warning(`card layout not applied for payment SP at ${cardStep}: ${(e as Error)?.message ?? e}`)
   }
 
   return {

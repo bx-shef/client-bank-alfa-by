@@ -37,7 +37,12 @@ echo
 # ⚠ BACKEND and WORKER, not `app`. `make logs` tails nginx, where none of this appears — that
 # mistake is exactly what sent someone looking in the wrong place once already. The worker sends
 # every payment message, so reading the backend alone would miss the bot's refusals there.
-log=$(docker compose -f "$COMPOSE" logs --since "$SINCE" --no-log-prefix backend worker 2>/dev/null)
+# ⚠ Two services come back as two streams, not one timeline: `compose logs` prints them side by
+# side, so without a merge the `tail` below is not «the latest lines» and a line cannot be tied to
+# its container (invite = backend, payments = worker). Hence the service prefix is KEPT and every
+# line gets a timestamp; sorting on everything after the first `|` (the timestamp comes first
+# there) merges both streams chronologically.
+log=$(docker compose -f "$COMPOSE" logs --since "$SINCE" --timestamps --no-color backend worker 2>/dev/null | LC_ALL=C sort -t'|' -k2)
 
 if [ -z "${log:-}" ]; then
   echo "лог пуст за этот срок — увеличьте окно: SINCE=24h make chat-log"
@@ -49,6 +54,9 @@ build=$(printf '%s\n' "$log" | grep -F '[bank-connect]' | grep -F 'картин�
 
 if [ -z "${attach:-}" ] && [ -z "${build:-}" ]; then
   echo "за $SINCE ни одной жалобы на вложение и ни одного отказа бота."
+  echo
+  echo "Отказ бота пишется не чаще раза в час на портал, пока в чат уходят сообщения. Если за этот"
+  echo "срок сообщения в чат уходили, значит бот их принял; если не уходили — судить не по чему."
   echo
   echo "⚠ ЭТО НЕ ЗНАЧИТ «картинки дошли». Это значит одно из двух:"
   echo "  • сообщений с картинками за этот срок не отправляли (инструкция по ключу Альфы —"
@@ -73,6 +81,7 @@ if [ -n "${attach:-}" ]; then
   printf '%s\n' "$attach" | tail -n 40
   echo
   echo "── как читать ──────────────────────────────────────────────"
+  echo "backend-… | — приглашение владельцу счёта;  worker-… | — сообщения о платежах"
   echo "ATTACH_ERROR     — портал счёл форму вложения негодной"
   echo "ATTACH_OVERSIZE  — вложение больше 60 000 символов (у нас столько не бывает)"
   echo "ACCESS_DENIED    — REST-бот недоступен на тарифе портала (сообщение уйдёт от сотрудника)"

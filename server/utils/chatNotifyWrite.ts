@@ -13,7 +13,7 @@
 
 import type { StatementItem } from '../../app/types/statement'
 import { buildChatMessage } from '../../app/utils/chatMessage'
-import { reportBotFallbackOnce, resolveBotId, sendAsBot } from './chatBotSend'
+import { reportBotFallback, resolveBotId, sendAsBot } from './chatBotSend'
 import { hasAttachBlocks, type ChatAttach, type ChatAttachment } from '../../app/utils/chatAttach'
 import { describeUpstreamError } from './logSanitize'
 import { useServerLogger } from './serverLogger'
@@ -127,7 +127,7 @@ async function deliver(
         if (hasAttachBlocks(attach)) {
           log.info(`бот не принял сообщение с вложением, пробуем от имени владельца токена: ${describeUpstreamError(e)}`)
         } else {
-          reportBotFallbackOnce(memberId, 'send', describeUpstreamError(e))
+          reportBotFallback(memberId, 'send', describeUpstreamError(e))
         }
       }
     }

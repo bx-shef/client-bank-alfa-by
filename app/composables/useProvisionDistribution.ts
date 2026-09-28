@@ -28,6 +28,9 @@ export function useProvisionDistribution() {
   const message = ref('')
   /** Смарт-процессы на месте, но карточка настроена не до конца: не ошибка, но админ узнаёт сразу. */
   const warning = ref('')
+  /** Дошла ли раскладка карточки «Платежи» до всех: `null` — не знаем (не запускали, отказ целиком
+   *  или ответ старого backend без этого поля). Читает вердикт установки. */
+  const cardConfigured = ref<boolean | null>(null)
   /** entityTypeId созданных/найденных СП — из них строятся ссылки в портал. */
   const paymentSpEtid = ref<number | null>(null)
   const distributionSpEtid = ref<number | null>(null)
@@ -45,6 +48,7 @@ export function useProvisionDistribution() {
     error.value = ''
     message.value = ''
     warning.value = ''
+    cardConfigured.value = null
     if (!a) {
       error.value = 'Настройка смарт-процессов доступна только внутри портала Bitrix24'
       return
@@ -56,16 +60,19 @@ export function useProvisionDistribution() {
       // ссылками (см. ProvisionSpCard), а здесь остаётся только «что произошло».
       paymentSpEtid.value = Number(res?.paymentSpEtid) || null
       distributionSpEtid.value = Number(res?.distributionSpEtid) || null
+      // ⚠ Строго булево: поле отсутствует у ответа сервера старше этой правки (образы статики и
+      // backend выкатываются порознь), и «не знаем» не должно читаться ни как «удалось», ни как
+      // «не удалось».
+      cardConfigured.value = typeof res?.cardConfigured === 'boolean' ? res.cardConfigured : null
       message.value = res?.created
         ? 'Смарт-процессы созданы.'
-        : res?.cardConfigured === true
-          ? 'Смарт-процессы уже были на месте, раскладка карточки «Платежи» обновлена.'
+        : cardConfigured.value === true
+          ? 'Смарт-процессы и раскладка карточки «Платежи» на месте.'
           : 'Смарт-процессы уже были на месте.'
-      // ⚠ Строго `false`: поле отсутствует у ответа сервера старше этой правки (образы статики и
-      // backend выкатываются порознь), и «не знаем» не должно читаться как «не удалось».
-      if (res?.cardConfigured === false) {
-        warning.value = 'Раскладку карточки «Платежи» применить не удалось: поля на месте и видны в '
-          + 'списке, но в карточке элемента их может не быть. Повторите настройку позже.'
+      if (cardConfigured.value === false) {
+        warning.value = 'Раскладку карточки «Платежи» применить не удалось: у всех сотрудников или у '
+          + 'части из них в карточке может не быть клиента и реквизитов вашей компании. Смарт-процессы '
+          + 'и поля на месте. Повторите настройку позже.'
       }
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
@@ -78,5 +85,5 @@ export function useProvisionDistribution() {
     }
   }
 
-  return { provision, syncEnabled, provisioning, error, message, warning, enabled, paymentSpEtid, distributionSpEtid }
+  return { provision, syncEnabled, provisioning, error, message, warning, cardConfigured, enabled, paymentSpEtid, distributionSpEtid }
 }

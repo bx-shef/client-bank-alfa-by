@@ -463,7 +463,7 @@ describe('аватар бота — иконка приложения (#496)', (
 // ⚠ Жалоба владельца 2026-09-28: «бота вообще не вижу», сообщения и дела — от установившего. Три
 // пути отказа бота молчали НАВСЕГДА, и причину нельзя было прочитать нигде. Теперь каждый говорит в
 // лог — но РАЗ на портал за жизнь процесса, иначе сотни сообщений в день забили бы лог повтором.
-describe('молчащие отказы бота — в лог, один раз на портал', () => {
+describe('молчащие отказы бота — в лог, не чаще раза в час на портал', () => {
   let lines: string[] = []
   beforeEach(() => {
     lines = []
@@ -474,6 +474,7 @@ describe('молчащие отказы бота — в лог, один раз 
   })
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.useRealTimers()
   })
   const about = (needle: string) => lines.filter(l => l.includes('[chat]') && l.includes(needle))
 
@@ -489,7 +490,7 @@ describe('молчащие отказы бота — в лог, один раз 
     expect(about('регистрация бота не удалась')[0]).toContain('socket hang up')
   })
 
-  it('отказ отправки ботом без вложения — тоже в лог, раз на портал', async () => {
+  it('отказ отправки ботом без вложения — тоже в лог, раз на портал в пределах часа', async () => {
     const { call } = fake({
       [BOT_MESSAGE_METHOD]: () => {
         throw new Error('BOT_NOT_FOUND')
@@ -519,5 +520,44 @@ describe('молчащие отказы бота — в лог, один раз 
     forgetBot('M1')
     await postChatMessage('chat1', 'b', call, 'M1')
     expect(about('бот не принял сообщение')).toHaveLength(3)
+  })
+
+  // ⚠ «Раз за жизнь процесса» уезжало бы за окно `make chat-log` (несколько часов при процессе,
+  // живущем сутками), и отчёт уверенно печатал бы «ни одного отказа бота» (находка ревью).
+  it('через час та же причина звучит снова — строка есть в любом окне отчёта', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-28T08:00:00Z'))
+    const { call } = fake({
+      [BOT_MESSAGE_METHOD]: () => {
+        throw new Error('BOT_NOT_FOUND')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    vi.setSystemTime(new Date('2026-09-28T08:59:00Z'))
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(1)
+    vi.setSystemTime(new Date('2026-09-28T09:00:01Z'))
+    await postChatMessage('chat1', 'c', call, 'M1')
+    expect(about('бот не принял сообщение')).toHaveLength(2)
+  })
+
+  // ⚠ Постоянный отказ кэшируется, и дальше регистрация не зовётся вовсе. Без повтора на
+  // закэшированном пути причина прозвучала бы один раз — при первом сообщении после старта.
+  it('закэшированный постоянный отказ тоже напоминает о себе раз в час — с исходной причиной', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-28T08:00:00Z'))
+    const { call } = fake({
+      'imbot.v2.Bot.register': () => {
+        throw new Error('insufficient_scope: The request requires higher privileges than provided')
+      }
+    })
+    await postChatMessage('chat1', 'a', call, 'M1')
+    await postChatMessage('chat1', 'b', call, 'M1')
+    expect(about('бот недоступен на портале')).toHaveLength(1)
+    vi.setSystemTime(new Date('2026-09-28T09:30:00Z'))
+    await postChatMessage('chat1', 'c', call, 'M1')
+    const lines2 = about('бот недоступен на портале')
+    expect(lines2).toHaveLength(2)
+    expect(lines2[1]).toContain('higher privileges')
   })
 })

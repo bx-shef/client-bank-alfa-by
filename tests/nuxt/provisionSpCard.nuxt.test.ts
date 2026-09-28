@@ -209,10 +209,10 @@ describe('ProvisionSpCard: смарт-процессы уже на месте', 
     expect(wrapper.find('[data-testid="provision-button"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="provision-rerun"]').exists()).toBe(true)
     // Цена названа рядом с кнопкой: перевод на общую раскладку стирает личные настройки карточки.
-    expect(wrapper.find('[data-testid="provision-sp"]').text()).toContain('Личные настройки этой карточки')
+    expect(wrapper.find('[data-testid="provision-sp"]').text()).toContain('личные настройки этой карточки')
   })
 
-  it('«Настроить заново» зовёт тот же провижининг и говорит, что карточка обновлена', async () => {
+  it('«Настроить заново» зовёт тот же провижининг и говорит, что карточка на месте', async () => {
     markProvisioned()
     fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1046, distributionSpEtid: 1048, created: false, addedFields: 0, cardConfigured: true })
     const wrapper = await mountReady()
@@ -220,7 +220,7 @@ describe('ProvisionSpCard: смарт-процессы уже на месте', 
     await flushPromises()
     await nextTick()
     expect(fetchMock).toHaveBeenCalledWith('/api/distribution/provision', expect.objectContaining({ method: 'POST' }))
-    expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('раскладка карточки «Платежи» обновлена')
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('раскладка карточки «Платежи» на месте')
     expect(wrapper.emitted('provisioned')).toHaveLength(1)
   })
 })

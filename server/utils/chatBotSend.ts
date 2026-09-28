@@ -55,30 +55,53 @@ function isAccessDenied(error: unknown): boolean {
 }
 
 /**
- * Отказы бота, о которых УЖЕ сказано в логе: ключ `<портал>|<вид>`.
+ * Когда последний раз сказали в лог об отказе бота: ключ `<портал>|<вид>` → момент, мс.
  *
  * ⚠ Заведено по жалобе владельца 2026-09-28: «бота вообще не вижу», сообщения и дела — от имени
  * установившего. Три пути отказа молчали НАВСЕГДА: временная ошибка регистрации, ответ регистрации
  * без id и отказ отправки без вложения. Снаружи всё это неотличимо от «бот работает», а причину
  * нельзя было прочитать нигде.
- * ⚠ Раз на портал за жизнь процесса, а не на каждое сообщение: сообщений в чат на живом портале
+ * ⚠ НЕ чаще раза в час на портал и вид, а не на каждое сообщение: сообщений в чат на живом портале
  * сотни в день, и безусловная строка забила бы лог повтором одной и той же причины.
+ * ⚠ Но и НЕ «раз за жизнь процесса» (так было в первой редакции, находка ревью): `make chat-log`
+ * читает окно в несколько часов, а процесс живёт сутками. Единственная строка давно уехала бы за
+ * окно, и отчёт уверенно печатал бы «ни одного отказа бота», пока каждое сообщение уходит от
+ * сотрудника. Раз в час — строка есть в любом окне, в котором сообщения вообще отправлялись.
  */
-const reported = new Set<string>()
+const reported = new Map<string, number>()
 
-/** Сказать в лог о причине, по которой сообщение уйдёт НЕ от бота, — один раз на портал и вид. */
-export function reportBotFallbackOnce(memberId: string, kind: 'register' | 'register-shape' | 'send', reason: string): void {
+/** Как часто повторять строку об одном и том же отказе бота на одном портале. */
+export const BOT_FALLBACK_REPORT_INTERVAL_MS = 60 * 60 * 1000
+
+/** Почему бот на портале недоступен НАВСЕГДА (до рестарта): причина кэшированного отказа. Без неё
+ *  повтор строки на закэшированном пути нечем было бы наполнить. */
+const refusalByPortal = new Map<string, string>()
+
+type BotFallbackKind = 'register' | 'register-shape' | 'send' | 'unavailable'
+
+const FALLBACK_WHAT: Record<BotFallbackKind, string> = {
+  'register': 'регистрация бота не удалась',
+  'register-shape': 'портал ответил на регистрацию бота без id',
+  'send': 'бот не принял сообщение',
+  'unavailable': 'бот недоступен на портале'
+}
+
+/** Сказать в лог о причине, по которой сообщение уйдёт НЕ от бота, — не чаще раза в час на портал
+ *  и вид отказа. */
+export function reportBotFallback(memberId: string, kind: BotFallbackKind, reason: string): void {
   const key = `${memberId}|${kind}`
-  if (reported.has(key)) return
-  reported.add(key)
-  const what = kind === 'send' ? 'бот не принял сообщение' : kind === 'register' ? 'регистрация бота не удалась' : 'портал ответил на регистрацию бота без id'
-  log.info(`${what}, сообщение уйдёт от имени владельца токена: ${reason}`)
+  const now = Date.now()
+  const last = reported.get(key)
+  if (last !== undefined && now - last < BOT_FALLBACK_REPORT_INTERVAL_MS) return
+  reported.set(key, now)
+  log.info(`${FALLBACK_WHAT[kind]}, сообщение уйдёт от имени владельца токена: ${reason}`)
 }
 
 /** Exposed for tests — a module-level cache would otherwise leak between cases. */
 export function resetBotCache(): void {
   botIdByPortal.clear()
   reported.clear()
+  refusalByPortal.clear()
 }
 
 /** Forget one portal — called on ONAPPUNINSTALL, where every other per-portal store is purged too.
@@ -87,7 +110,8 @@ export function resetBotCache(): void {
  *  how a store quietly stops being swept at all. */
 export function forgetBot(memberId: string): void {
   botIdByPortal.delete(memberId)
-  for (const key of reported) if (key.startsWith(`${memberId}|`)) reported.delete(key)
+  refusalByPortal.delete(memberId)
+  for (const key of reported.keys()) if (key.startsWith(`${memberId}|`)) reported.delete(key)
 }
 
 /**
@@ -103,7 +127,12 @@ export function forgetBot(memberId: string): void {
  */
 export async function resolveBotId(memberId: string, call: RestCall): Promise<string | null> {
   const cached = botIdByPortal.get(memberId)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) {
+    // ⚠ Закэшированный отказ тоже напоминает о себе (не чаще раза в час): иначе постоянная причина
+    // прозвучала бы в логе один раз при первом сообщении и дальше не нашлась бы ни в каком окне.
+    if (cached === null) reportBotFallback(memberId, 'unavailable', refusalByPortal.get(memberId) ?? 'без описания')
+    return cached
+  }
 
   const registration = buildBotRegisterCall(B24_CHAT_BOT)
   if (!registration) return null // unreachable with the shipped constant; fail-safe anyway
@@ -119,20 +148,22 @@ export async function resolveBotId(memberId: string, call: RestCall): Promise<st
       botIdByPortal.set(memberId, id)
       await pushBotProfile(id, call)
     } else {
-      reportBotFallbackOnce(memberId, 'register-shape', JSON.stringify(resp?.result ?? null).slice(0, 200))
+      reportBotFallback(memberId, 'register-shape', JSON.stringify(resp?.result ?? null).slice(0, 200))
     }
     return id
   } catch (error) {
     if (isPermanentBotError(error)) {
-      // «Не бывает» — запоминаем, чтобы не спрашивать на каждом сообщении. Сказать об этом ВСЛУХ,
-      // один раз: молчание здесь неотличимо от «бот работает», а самый частый повод попасть сюда —
-      // старая установка без скоупа `imbot`, которую чинит переустановка приложения.
-      log.info(`бот недоступен на портале, сообщения пойдут от имени владельца токена: ${(error as Error)?.message ?? 'без описания'}`)
+      // «Не бывает» — запоминаем, чтобы не спрашивать на каждом сообщении. Сказать об этом ВСЛУХ:
+      // молчание здесь неотличимо от «бот работает», а самый частый повод попасть сюда — старая
+      // установка без скоупа `imbot`, которую чинит переустановка приложения.
+      const reason = describeUpstreamError(error)
       botIdByPortal.set(memberId, null)
+      refusalByPortal.set(memberId, reason)
+      reportBotFallback(memberId, 'unavailable', reason)
       return null
     }
     // Транзиентная ошибка: не кэшируем, следующая попытка спросит заново. Но и не молчим (см. `reported`).
-    reportBotFallbackOnce(memberId, 'register', describeUpstreamError(error))
+    reportBotFallback(memberId, 'register', describeUpstreamError(error))
     return null
   }
 }

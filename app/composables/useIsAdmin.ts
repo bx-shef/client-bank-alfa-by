@@ -15,7 +15,12 @@ export function useIsAdmin() {
 
   function check() {
     const b24 = useB24()
-    inPortal.value = b24.isInit()
+    // ⚠ И `get()`, а не только `isInit()`: реактивный флаг внутри `useB24` выставляется в `nextTick`
+    // после рукопожатия, поэтому сразу после `await init()` он может быть ещё «снаружи». Прочитай
+    // его вызывающий раньше — не-админ был бы принят за «вне портала», и ему вернулись бы кнопка и
+    // меню настроек (#775). Пять старых мест защищались своим `await nextTick()`, два новых — нет;
+    // правило здесь закрывает все разом. Тем же приёмом `InPortalGate` читает `get()`.
+    inPortal.value = b24.isInit() || b24.get() !== undefined
     if (!inPortal.value) {
       isAdmin.value = false
       return

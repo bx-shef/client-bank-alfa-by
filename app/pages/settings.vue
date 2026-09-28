@@ -101,6 +101,9 @@ onMounted(async () => {
   try {
     await init()
     checkAdmin()
+    // ⚠ Сразу после проверки, а не в `finally`: ниже `setTitle` может ждать ответа портала, и всё
+    // это время страница оставалась бы в состоянии «ещё не проверили» (находка ревью).
+    adminChecked.value = true
     isSlider.value = placementPlace() === APP_SLIDER_PLACE_SETTINGS
     await get()?.parent.setTitle('Настройки')
   } catch (e) {
@@ -127,8 +130,12 @@ async function close(): Promise<void> {
 
 <template>
   <InPortalGate>
+    <!-- ⚠ До проверки админа — ничего (#775): `denied` до неё ложно, и не-админ на время
+         рукопожатия видел бы меню разделов и шапку. -->
+    <template v-if="!adminChecked" />
     <SettingsAdminOnly
-      v-if="denied"
+      v-else-if="denied"
+      :level="1"
       class="min-h-svh"
       data-testid="settings-admin-only"
     />

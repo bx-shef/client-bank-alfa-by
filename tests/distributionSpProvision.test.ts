@@ -5,6 +5,8 @@ import {
   provisionDistributionSp
 } from '../server/utils/distributionSpProvision'
 import {
+  buildPaymentCardConfigCall,
+  cardLayoutSignature,
   DISTRIBUTION_SP_FIELDS,
   DISTRIBUTION_SP_TITLE,
   PAYMENT_SP_FIELDS,
@@ -395,5 +397,96 @@ describe('раскладка карточки реестра (#27)', () => {
     })
     expect(res.cardConfigured).toBe(false)
     expect(res.payment.entityTypeId).toBe(1038)
+  })
+})
+
+// ⚠ Перевод всех на общую раскладку УДАЛЯЕТ личные раскладки сотрудников, а провижининг идёт и
+// сам — при каждой установке и переустановке (находка ревью #776). Цену платим, только когда на
+// портале раскладка НЕ наша.
+describe('раскладка карточки: не трогать то, что уже наше', () => {
+  const KNOWN = { payment: { entityTypeId: 1038, id: 7 }, distribution: { entityTypeId: 1040, id: 8 } }
+  const OURS = buildPaymentCardConfigCall(KNOWN.payment).params.data as Array<{ name: string, title: string, elements: Array<{ name: string }> }>
+
+  function portalWithLayout(layout: (() => unknown) | unknown) {
+    const methods: string[] = []
+    const call = async (method: string) => {
+      methods.push(method)
+      if (method === 'crm.item.details.configuration.get') {
+        return { result: typeof layout === 'function' ? (layout as () => unknown)() : layout }
+      }
+      return { result: {} }
+    }
+    return { call, methods }
+  }
+  const wrote = (methods: string[]) => ({
+    set: methods.includes('crm.item.details.configuration.set'),
+    force: methods.includes('crm.item.details.configuration.forceCommonScopeForAll')
+  })
+
+  it('раскладка уже наша — ни записи, ни перевода: личные раскладки переживают переустановку', async () => {
+    const { call, methods } = portalWithLayout(OURS)
+    const res = await provisionDistributionSp(call as never, KNOWN)
+    expect(wrote(methods)).toEqual({ set: false, force: false })
+    expect(res.cardConfigured).toBe(true)
+  })
+
+  it('та же раскладка в форме портала — другие подписи, флаги и регистр — всё ещё «наша»', async () => {
+    const echoed = OURS.map(sec => ({
+      ...sec,
+      title: `${sec.title} (переименовано)`,
+      elements: sec.elements.map(e => ({ name: e.name.toLowerCase(), optionFlags: '1' }))
+    }))
+    const { call, methods } = portalWithLayout(echoed)
+    await provisionDistributionSp(call as never, KNOWN)
+    expect(wrote(methods)).toEqual({ set: false, force: false })
+  })
+
+  it('прежняя раскладка (клиент как COMPANY_ID) — выставляем и переводим всех', async () => {
+    const old = OURS.map(sec => ({
+      ...sec,
+      elements: sec.elements.map(e => (e.name === 'CLIENT' ? { name: 'COMPANY_ID' } : e))
+    }))
+    const { call, methods } = portalWithLayout(old)
+    const res = await provisionDistributionSp(call as never, KNOWN)
+    expect(wrote(methods)).toEqual({ set: true, force: true })
+    expect(res.cardConfigured).toBe(true)
+  })
+
+  it('раскладки нет или прочитать не вышло — выставляем', async () => {
+    const empty = portalWithLayout(null)
+    await provisionDistributionSp(empty.call as never, KNOWN)
+    expect(wrote(empty.methods)).toEqual({ set: true, force: true })
+
+    const broken = portalWithLayout(() => {
+      throw new Error('ACCESS_DENIED')
+    })
+    await provisionDistributionSp(broken.call as never, KNOWN)
+    expect(wrote(broken.methods)).toEqual({ set: true, force: true })
+  })
+
+  it('поля в другом порядке — это другая раскладка', () => {
+    const swapped = OURS.map(sec => ({ ...sec, elements: [...sec.elements].reverse() }))
+    expect(cardLayoutSignature(swapped)).not.toBe(cardLayoutSignature(OURS))
+    expect(cardLayoutSignature({})).toBeNull()
+  })
+
+  // Шаг назван в логе: отказ `set` оставляет карточку прежней у всех, отказ перевода — только у
+  // тех, кто выбрал раскладку «для себя».
+  it('отказ перевода на общую назван в логе по шагу', async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+      lines.push(String(c))
+      return true
+    })
+    try {
+      const call = async (method: string) => {
+        if (method === 'crm.item.details.configuration.forceCommonScopeForAll') throw new Error('нет прав')
+        return { result: {} }
+      }
+      await provisionDistributionSp(call as never, KNOWN)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines.some(l => l.includes('card layout not applied') && l.includes('forceCommonScopeForAll'))).toBe(true)
   })
 })
