@@ -125,10 +125,16 @@ describe('Альфа-Банк: инструкция вместо ссылки', 
     expect(res.status).toBe(200)
     expect(d.buildPriorUrl).not.toHaveBeenCalled()
     const [, , text, attachment] = vi.mocked(d.sendMessage).mock.calls[0]!
-    expect(text).toContain(KEY_LINK)
+    // Ссылка на экран ввода ключа — в шаге 6, внизу вложения (скобки закодированы для `[URL=…]`),
+    // а в тексте сообщения только вступление и примечания.
+    const encoded = KEY_LINK.replace(/\[/g, '%5B').replace(/\]/g, '%5D')
+    const lastBlock = attachment!.attach[attachment!.attach.length - 1]!
+    expect('MESSAGE' in lastBlock && lastBlock.MESSAGE).toContain(`[URL=${encoded}]`)
+    expect(text).toContain('Ключ никому не пересылайте')
     // Шаги уехали во вложение; полный текст со всеми шагами едет рядом — на случай отказа портала.
     expect(attachment!.fallbackText).toContain('Open API')
     expect(attachment!.fallbackText).toContain('shef-bank-import')
+    expect(attachment!.fallbackText).toContain(`[URL=${encoded}]`)
   })
 
   // ⚠ Отсутствие `client_id` — состояние СЕРВЕРА, а не ошибка нажавшего: инструкция без него
