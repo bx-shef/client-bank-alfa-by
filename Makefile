@@ -2,7 +2,7 @@
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe alfa-currency-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
-        bank-connect-log chat-log feedback-on \
+        bank-connect-log chat-log feedback-on prior-register \
         bitrix-check deploy-status deploy-now deploy-pause deploy-resume deploy-install
 
 # Обёртки над командами деплоя. Подробности — docs/DEPLOY.md.
@@ -608,6 +608,28 @@ reap-off:
 	  && echo "PORTAL_REAP_ENABLED=0" >> .env \
 	  && { $(DEPLOY_LOCKED) "$$@" $(DC) up -d backend; } \
 	  && echo "[make] стирание выключено; пометка мёртвых грантов продолжает идти"
+
+## Своя регистрация Приорбанка для этого сервера: ключ, регистрация в банке, запись в .env
+#
+#   make prior-register
+#
+# Для сервера КЛИЕНТА (docs/CLIENT_VERSION.md, шаг 4): у клиента своё приложение в банке, а не наше.
+# Ключ генерируется внутри контейнера backend и не покидает сервер — ни экрана, ни ноутбука, ни
+# ручной вставки многострочного ключа в .env. Спросит ключи ТЕХНОЛОГИЧЕСКОГО приложения
+# (промышленные, из Магазина API банка; секрет вводится без отображения) и имя приложения в банке
+# (есть умолчание); домен — только если его нет в .env; «да» — если заменяет прежнюю регистрацию.
+# ⚠ Регистрация читается из банка обратно и сверяется ДО записи .env: исправить её у банка нельзя
+# (`PUT /register` отвечает 500), так что несовпадение останавливает команду, а сервер остаётся как был.
+# ⚠ Подписки на пять API делаются после — в кабинете банка; затем `make prior-probe`.
+# ⚠ Перезапуск и проверка — как у feedback-on: backend И worker (продление токенов живёт в воркере).
+prior-register:
+	@echo "[make] скачиваю prod-prior-register.sh из $(SRC)"
+	@t=$$(mktemp /tmp/prior-register.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-prior-register.sh" \
+	  && { fp=$$(bash "$$t" "$(DC)" 3>&1 1>&4); } 4>&1 \
+	  && n=$$($(DC) ps -q worker 2>/dev/null | wc -l) \
+	  && { $(DEPLOY_LOCKED) "$$@" $(DC) up -d --scale worker=$$(( n > 0 ? n : 1 )) backend worker; } \
+	  && bash "$$t" --verify "$(DC)" "$$fp"
 
 ## Включить обратную связь: спросит репозиторий и токен, проверит права, перезапустит (#499)
 #

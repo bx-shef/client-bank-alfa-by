@@ -338,6 +338,7 @@ POSTGRES_PASSWORD=$(openssl rand -hex 24)
 SESSION_SECRET=$(openssl rand -hex 32)
 PUBLIC_PAGE_BASIC_AUTH_PASS=$(openssl rand -hex 16)
 B24_SELFHOSTED_HOSTS=<домен портала>
+HOST_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
 B24_CLIENT_ID=
 B24_CLIENT_SECRET=
 CRON_REAL_POLL=0
@@ -416,6 +417,8 @@ Actions → Variables`), а не в `.env` на сервере: там это м
 | `B24_SELFHOSTED_HOSTS` | серверные вызовы в коробочный портал отвергает наш же SSRF-гейт, ещё до сети |
 | `B24_CLIENT_ID` / `_SECRET` | нет обновления токенов и записи в CRM (шаг 7) |
 | `B24_TOKEN_ENC_KEY`, `POSTGRES_PASSWORD`, `SESSION_SECRET` | стек не поднимется — compose требует их явно |
+| `HOST_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt` | Альфа отвечает `SELF_SIGNED_CERT_IN_CHAIN`: путь по умолчанию — Debian, на ВМ (RHEL) его нет, и docker создаёт на его месте пустой каталог (замерено 2026-09-28) |
+| `PRIOR_OAUTH_*` | Приорбанк не подключается; задаётся одной командой `make prior-register` — своя регистрация клиента ([`CLIENT_VERSION.md`](CLIENT_VERSION.md), шаг 4) |
 
 ⚠ **`B24_PORTAL_ORIGINS` и `B24_SELFHOSTED_HOSTS` — один список доменов в двух местах, и это не
 дубль:** первый применяет БРАУЗЕР (CSP), второй — НАШ backend (SSRF-гейт). Забыть первый —

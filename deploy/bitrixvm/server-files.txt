@@ -22,5 +22,6 @@
 /scripts/prod-feedback-on.sh
 /scripts/prod-payers.sh
 /scripts/prod-poll-check.sh
+/scripts/prod-prior-register.sh
 /scripts/prod-reap-status.sh
 /scripts/queue-stats.sh

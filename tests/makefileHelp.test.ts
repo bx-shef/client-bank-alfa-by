@@ -85,7 +85,7 @@ const OPERATOR = ['prod-up', 'prod-down', 'prod-pull', 'prod-redeploy', 'logs', 
   // #766: переустановить скрипт автообновления после self-update — он сам себя не обновляет.
   'deploy-install',
   // #499: включить канал обратной связи — репозиторий и токен с клавиатуры, проверка прав до записи.
-  'feedback-on']
+  'feedback-on', 'prior-register']
 
 /** Цели, которые запускают ИЗ РЕПОЗИТОРИЯ, а не с сервера — справка сервера их не касается. */
 const SERVICE = ['dev', 'build-local']
