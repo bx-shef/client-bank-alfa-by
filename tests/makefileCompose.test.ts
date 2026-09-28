@@ -407,7 +407,7 @@ describe('на ВМ с автообновлением prod-pull/prod-redeploy о
     expect(calls()).toContain(`flock -w 900 ${deploy}/state/deploy.lock docker compose -f docker-compose.prod.yml up -d`)
   })
 
-  it('prod-down — без замка: остановку нельзя заставлять ждать идущий выкат (#769)', () => {
+  it('prod-down — без замка: остановку нельзя заставлять ждать идущий выкат', () => {
     const { call, calls } = vm('home')
     expect(call('prod-down').status).toBe(0)
     expect(calls()).toEqual(['docker compose -f docker-compose.prod.yml down'])
