@@ -428,7 +428,7 @@ describe('на ВМ с автообновлением prod-pull/prod-redeploy о
     const ups = MAKEFILE.split('\n').filter(l => l.startsWith('\t') && l.includes('$(DC) up -d'))
     expect(ups.filter(l => !l.includes('$(DEPLOY_LOCKED)')).map(l => l.trim()))
       .toEqual(['$(DC) up -d && \\', '@$(DC) up -d crypto-gw \\'])
-    expect(ups.filter(l => l.includes('$(DEPLOY_LOCKED)')).length).toBe(3)
+    expect(ups.filter(l => l.includes('$(DEPLOY_LOCKED)')).length).toBe(4)
   })
 
   it('prod-up при идущем прогоне — говорит, что ждёт, и всё равно идёт под замком', () => {
