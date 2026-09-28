@@ -48,7 +48,7 @@ function dryRun(dir: string, target: string): string[] {
 // Подмена `$(DC)` на жёсткий `-f` (хоть в рецепте, хоть целевой переменной над ним) текстовым
 // поиском по рецепту не ловится — замерено мутацией, — поэтому проверка та же: настоящий make -n.
 describe('цели, передающие $(DC) скрипту аргументом, тоже уважают COMPOSE_FILE', () => {
-  const ARG_TARGETS = ['queue-stats', 'feedback-on', 'alfa-currency-probe']
+  const ARG_TARGETS = ['queue-stats', 'feedback-on', 'alfa-currency-probe', 'prior-register']
 
   it.each(ARG_TARGETS)('%s: без COMPOSE_FILE — прежний -f docker-compose.prod.yml', (t) => {
     const lines = dryRun(stackDir('DOMAIN=x.by\n'), t)

@@ -97,16 +97,25 @@ http.createServer((req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)) }
     if (req.url === '/open-banking-authorize/v1.0/oauth2/token') {
       if (mode === 'badtech') return send(401, { error: 'invalid_client' })
+      // Банк эхом возвращает присланное — в тексте ошибки оказывается секрет техприложения.
+      if (mode === 'echo') return send(400, { error: 'bad request: ' + req.headers.authorization + ' ' + body, error_description: req.headers.authorization })
       return send(200, { access_token: 'tokA', token_type: 'Bearer' })
     }
     if (req.method === 'POST' && req.url === '/open-banking-dcr/v1.0/register') {
       fs.writeFileSync(log + '/register', body)
       if (mode === 'dup') return send(409, { error: 'conflict' })
       stored = JSON.parse(body)
+      if (mode === 'badredirect') stored.redirect_uris = ['https://evil.example/cb']
+      if (mode === 'badauth') stored.token_endpoint_auth_method = ['client_secret_basic']
+      if (mode === 'badclient') return send(201, { client_id: 'NEW"; rm -rf /', client_secret: 'x' })
+      if (mode === 'badsecret') return send(201, { client_id: 'NEWclientID123', client_secret: 'a b$c' })
       if (mode === 'otherkey') stored.jwks = JSON.stringify({ keys: [{ kty: 'RSA', kid: 'client-key-1', n: 'x'.repeat(342), e: 'AQAB' }] })
       return send(201, { client_id: 'NEWclientID123', client_secret: 'NEWsecret456' })
     }
-    if (req.method === 'GET' && req.url === '/open-banking-dcr/v1.0/register/NEWclientID123') return send(200, stored)
+    if (req.method === 'GET' && req.url === '/open-banking-dcr/v1.0/register/NEWclientID123') {
+      if (mode === 'noreadback') return send(500, {})
+      return send(200, stored)
+    }
     send(404, {})
   })
 }).listen(0, '127.0.0.1', function () { process.stdout.write('PORT ' + this.address().port + '\n') })
@@ -117,7 +126,7 @@ http.createServer((req, res) => {
 const FAKE_DOCKER = String.raw`#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_LOG/docker"
 case "$*" in
-  *" db "*) printf '%s\n' "$FAKE_CONNECTED" ;;
+  *" db "*) [ "$FAKE_CONNECTED" = down ] && exit 1; printf '%s\n' "$FAKE_CONNECTED" ;;
   *" backend node "*) while [ "$1" != node ]; do shift; done; exec node "${'$'}{@:2}" ;;
 esac
 `
@@ -155,13 +164,13 @@ sys.exit(os.waitstatus_to_exitcode(status))
 const TECH_SECRET = 'TechSecretQwerty789'
 const ENV_BEFORE = 'DOMAIN=bank-app.example.by\nPRIOR_OAUTH_CLIENT_ID=OURS\nPRIOR_OAUTH_KID=prior-key-1\nALFA_OAUTH_CLIENT_ID=alfa\n'
 
-async function e2e(opts: { mode?: string, connected?: string, confirm?: string } = {}) {
+async function e2e(opts: { mode?: string, connected?: string, confirm?: string, envBefore?: string, techId?: string, domain?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'prior-reg-'))
   const bin = join(dir, 'bin'), log = join(dir, 'log'), stack = join(dir, 'stack')
   for (const d of [bin, log, stack]) mkdirSync(d)
   writeFileSync(join(bin, 'docker'), FAKE_DOCKER)
   chmodSync(join(bin, 'docker'), 0o755)
-  writeFileSync(join(stack, '.env'), ENV_BEFORE)
+  writeFileSync(join(stack, '.env'), opts.envBefore ?? ENV_BEFORE)
   const bank = spawn(process.execPath, ['-e', FAKE_BANK], { env: { ...process.env, BANK_LOG: log, BANK_MODE: opts.mode ?? 'ok' } })
   try {
     const port = await new Promise<string>((ok, fail) => {
@@ -172,9 +181,12 @@ async function e2e(opts: { mode?: string, connected?: string, confirm?: string }
       bank.on('error', fail)
     })
     const answers = [
-      ['«да»', opts.confirm ?? 'да'],
+      ...((opts.envBefore ?? ENV_BEFORE).includes('PRIOR_OAUTH_CLIENT_ID') || (opts.connected ?? '0') !== '0'
+        ? [['«да»', opts.confirm ?? 'да']]
+        : []),
+      ...(opts.domain === undefined ? [] : [['Домен приложения', opts.domain]]),
       ['Имя приложения', ''],
-      ['client_id техприложения', 'TechID123'],
+      ['client_id техприложения', opts.techId ?? 'TechID123'],
       ['не отображается', TECH_SECRET]
     ]
     const fp = join(dir, 'fp')
@@ -308,6 +320,125 @@ describe.skipIf(!hasCompose)('docker compose разворачивает ключ
       const cfg = JSON.parse(execFileSync('docker', ['compose', 'config', '--format', 'json'], { cwd: dir, encoding: 'utf8' }))
       expect(cfg.services.a.environment.K).toBe(pem)
       expect(cfg.services.a.environment.T).toBe('https://api.priorbank.by:9344/open-banking-authorize/v1.0/oauth2/token')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('сквозной прогон: сверка и ввод', () => {
+  it.each([
+    ['noreadback', 'без сверки не записываю'],
+    ['badredirect', 'адрес возврата в банке не совпал'],
+    ['badauth', 'не private_key_jwt']
+  ])('чтение обратно %s — .env не тронут, подсказка удалить приложение', async (mode, text) => {
+    const r = await e2e({ mode })
+    expect(r.code).not.toBe(0)
+    expect(r.out).toContain(text)
+    expect(r.out).toContain('Удалите приложение NEWclientID123')
+    expect(r.env).toBe(ENV_BEFORE)
+    expect(r.backups).toEqual([])
+  }, 120_000)
+
+  it.each(['badclient', 'badsecret'])('банк вернул %s с опасными символами — .env не тронут', async (mode) => {
+    const r = await e2e({ mode })
+    expect(r.code).not.toBe(0)
+    expect(r.out).toContain('неожиданными символами')
+    expect(r.env).toBe(ENV_BEFORE)
+  }, 120_000)
+
+  it('банк эхом вернул запрос в тексте ошибки — секрет на экран не попадает', async () => {
+    const r = await e2e({ mode: 'echo' })
+    expect(r.code).not.toBe(0)
+    expect(r.out).toContain('(HTTP 400)')
+    expect(r.out).not.toContain(TECH_SECRET)
+    expect(r.out).not.toContain(Buffer.from(`TechID123:${TECH_SECRET}`).toString('base64'))
+  }, 120_000)
+
+  it('домена в .env нет — спрашивает, и адрес возврата строится из введённого', async () => {
+    const r = await e2e({ envBefore: 'ALFA_OAUTH_CLIENT_ID=alfa\n', domain: 'bank.client.by' })
+    expect(r.code, r.out).toBe(0)
+    expect(JSON.parse(r.register).redirect_uris).toEqual(['https://bank.client.by/oauth-priorbank-by/'])
+    expect(envVal(r.env, 'PRIOR_OAUTH_REDIRECT_URI')).toBe('https://bank.client.by/oauth-priorbank-by/')
+  }, 120_000)
+
+  it('введён негодный домен — отказ до банка', async () => {
+    const r = await e2e({ envBefore: 'X=1\n', domain: 'not a domain' })
+    expect(r.code).toBe(2)
+    expect(r.requests).toBe('')
+    expect(r.env).toBe('X=1\n')
+  }, 120_000)
+
+  it('негодный client_id техприложения — отказ до банка', async () => {
+    const r = await e2e({ techId: 'Tech ID"' })
+    expect(r.code).toBe(2)
+    expect(r.requests).toBe('')
+  }, 120_000)
+
+  it('база не ответила — «не знаю» спрашивает «да», а не считается нулём', async () => {
+    const r = await e2e({ envBefore: 'DOMAIN=bank-app.example.by\n', connected: 'down', confirm: 'нет' })
+    expect(r.out).toContain('не смог проверить')
+    expect(r.out).toContain('Продолжить?')
+    expect(r.out).toContain('Отменено, ничего не менял')
+    expect(r.code).toBe(1)
+    expect(r.requests).toBe('')
+  }, 120_000)
+})
+
+// Цель make — настоящим вызовом: отпечаток уходит по fd 3 в --verify, экран — на терминал,
+// перезапуск — up -d обоих контейнеров с прежним числом воркеров. Трюк с дескрипторами текстовой
+// проверкой не защитить: перепутанные `3>&1 1>&4` дают пустой отпечаток при зелёном тексте рецепта.
+describe('цель make prior-register', () => {
+  it('отпечаток доходит до --verify, вывод скрипта — на экран, контейнеры перезапускаются', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prior-make-'))
+    try {
+      const bin = join(dir, 'bin'), stack = join(dir, 'stack'), home = join(dir, 'home'), log = join(dir, 'log')
+      for (const d of [bin, stack, home, log]) mkdirSync(d)
+      writeFileSync(join(stack, 'Makefile'), readFileSync(resolve(import.meta.dirname, '../Makefile')))
+      writeFileSync(join(stack, '.env'), 'DOMAIN=x.by\n')
+      // Подставной curl кладёт вместо скачанного скрипта заглушку с тем же интерфейсом.
+      writeFileSync(join(bin, 'curl'), `#!/usr/bin/env bash
+while [ "$1" != -o ]; do shift; done
+cat > "$2" <<'STUB'
+if [ "$1" = --verify ]; then echo "verify dc=[$2] fp=[$3]" >> "$FAKE_LOG/verify"; exit 0; fi
+echo "экран регистрации"
+printf 'abc123fingerprint' >&3
+STUB
+`)
+      writeFileSync(join(bin, 'docker'), '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$FAKE_LOG/docker"\n')
+      for (const f of ['curl', 'docker']) chmodSync(join(bin, f), 0o755)
+      const out = execFileSync('make', ['--no-print-directory', 'prior-register'], {
+        cwd: stack, encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, FAKE_LOG: log }
+      })
+      expect(out).toContain('экран регистрации')
+      expect(out).not.toContain('abc123fingerprint')
+      expect(readFileSync(join(log, 'verify'), 'utf8')).toBe('verify dc=[docker compose -f docker-compose.prod.yml] fp=[abc123fingerprint]\n')
+      expect(readFileSync(join(log, 'docker'), 'utf8')).toContain('compose -f docker-compose.prod.yml up -d --scale worker=1 backend worker')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('регистрация не удалась — ни перезапуска, ни проверки', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prior-make-'))
+    try {
+      const bin = join(dir, 'bin'), stack = join(dir, 'stack'), home = join(dir, 'home'), log = join(dir, 'log')
+      for (const d of [bin, stack, home, log]) mkdirSync(d)
+      writeFileSync(join(stack, 'Makefile'), readFileSync(resolve(import.meta.dirname, '../Makefile')))
+      writeFileSync(join(bin, 'curl'), `#!/usr/bin/env bash
+while [ "$1" != -o ]; do shift; done
+printf 'echo verify >> "$FAKE_LOG/verify"; exit 1\n' > "$2"
+`)
+      writeFileSync(join(bin, 'docker'), '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$FAKE_LOG/docker"\n')
+      for (const f of ['curl', 'docker']) chmodSync(join(bin, f), 0o755)
+      const r = spawnSync('make', ['--no-print-directory', 'prior-register'], {
+        cwd: stack, encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, FAKE_LOG: log }
+      })
+      expect(r.status).not.toBe(0)
+      expect(readFileSync(join(log, 'verify'), 'utf8')).toBe('verify\n')
+      let docker = ''
+      try {
+        docker = readFileSync(join(log, 'docker'), 'utf8')
+      } catch { /* docker не вызывался */ }
+      expect(docker).not.toContain('up -d')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

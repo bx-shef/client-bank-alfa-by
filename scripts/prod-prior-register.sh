@@ -140,15 +140,17 @@ env_block() {
 # base64 values. The registration metadata MUST equal `buildRegistrationMetadata` of
 # app/utils/priorOauth.ts (that file is not on the server) — tests/prodPriorRegister.test.ts
 # compares the body this code sends with it.
-# ⚠ Error texts from the bank are cut and stripped of anything but printable ASCII/Cyrillic: they go
-# to the operator's screen, and the bank may echo request fields.
+# ⚠ The bank's error TEXT never reaches the screen: a bank may echo the request back, and the request
+# carries the tech secret (the same rule as for the Alfa API key). Only the HTTP status and the
+# RFC 6749 machine code (`invalid_client`, …) are passed on — a code is a short lowercase word by
+# definition, anything else is dropped.
 REGISTER_JS='
 const crypto = require("crypto");
 let raw = "";
 process.stdin.on("data", d => raw += d).on("end", async () => {
   const out = (k, v) => process.stdout.write("\nPRIOR_REG_" + k + " " + Buffer.from(String(v ?? "")).toString("base64") + "\n");
-  const clean = s => String(s ?? "").replace(/[^\x20-\x7eЀ-ӿ]/g, " ").slice(0, 300);
-  const fail = (stage, status, e) => { out("STAGE", stage); out("STATUS", status); out("ERROR", clean(e)); out("OK", "0"); };
+  const code = e => { const c = String(e ?? ""); return /^[a-z_]{1,40}$/.test(c) ? c : ""; };
+  const fail = (stage, status, e) => { out("STAGE", stage); out("STATUS", status); out("ERROR", code(e)); out("OK", "0"); };
   try {
     const i = JSON.parse(raw);
     const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -163,7 +165,7 @@ process.stdin.on("data", d => raw += d).on("end", async () => {
       body: new URLSearchParams({ grant_type: "client_credentials", scope: "apim:subscribe apim:app_manage" })
     });
     const tj = await tr.json().catch(() => null);
-    if (!tr.ok || !tj || !tj.access_token) return fail("token", tr.status, tj && (tj.error_description || tj.error));
+    if (!tr.ok || !tj || !tj.access_token) return fail("token", tr.status, tj && tj.error);
     const auth = { Authorization: "Bearer " + tj.access_token, Accept: "application/json" };
     const meta = {
       client_name: i.name,
@@ -180,7 +182,7 @@ process.stdin.on("data", d => raw += d).on("end", async () => {
       method: "POST", signal: sig(), headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(meta)
     });
     const rj = await rr.json().catch(() => null);
-    if (!rr.ok || !rj || !rj.client_id) return fail("register", rr.status, rj && (rj.error_description || rj.error || rj.message));
+    if (!rr.ok || !rj || !rj.client_id) return fail("register", rr.status, rj && rj.error);
     // Read-back: the slash before the id is required — without it the path lands on the POST route.
     const gr = await fetch(i.base + "/open-banking-dcr/v1.0/register/" + encodeURIComponent(rj.client_id), { signal: sig(), headers: auth });
     const gj = await gr.json().catch(() => null);
@@ -199,7 +201,7 @@ process.stdin.on("data", d => raw += d).on("end", async () => {
     out("READ_AUTH", JSON.stringify((gj && gj.token_endpoint_auth_method) || []));
     out("OK", "1");
   } catch (e) {
-    fail("network", "", (e && e.cause && e.cause.code) || (e && e.message) || e);
+    fail("network", "", String((e && e.cause && e.cause.code) || "").toLowerCase());
   }
 });'
 
@@ -280,7 +282,9 @@ elif [ "$CONNECTED" -gt 0 ]; then
   echo "⚠ Подключённых счетов Приорбанка: $CONNECTED. После замены регистрации они перестанут работать,"
   echo "  владельцам счетов придётся подключаться заново."
 fi
-if [ -n "$OLD_ID" ] || [ "${CONNECTED:-0}" != "0" ]; then
+# ⚠ «The database did not answer» is NOT «no connected accounts»: the step may break them, so an
+# unknown count asks too.
+if [ -n "$OLD_ID" ] || [ "${CONNECTED:-unknown}" != "0" ]; then
   printf 'Продолжить? Введите «да»: '
   IFS= read -r ANSWER
   [ "$(trim "$ANSWER")" = "да" ] || { echo "Отменено, ничего не менял."; exit 1; }
@@ -323,7 +327,7 @@ printf '\n── 1–4. Ключ, токен A, регистрация, чтен
 # ⚠ JSON built by node from the environment of THIS shell would put the secret into an argument;
 # instead the values are escaped here and piped. Only the characters valid_cred allows reach this
 # point, plus the name and the redirect, which are escaped for JSON below.
-json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+json_str() { printf '%s' "$1" | tr -d '\000-\037\177' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 INPUT="$(printf '{"base":"%s","kid":"%s","name":"%s","redirect":"%s","techId":"%s","techSecret":"%s"}' \
   "$(json_str "$PRIOR_DCR_BASE")" "$PRIOR_KID" "$(json_str "$APP_NAME")" "$(json_str "$REDIRECT")" \
   "$TECH_ID" "$TECH_SECRET")"
@@ -368,26 +372,28 @@ esac
 
 # ⚠ A mismatch here means the registration is unusable and can't be fixed (PUT is 500): stop before
 # .env, so the working state of the server stays as it was.
-if [ "$READ_STATUS" = "200" ]; then
-  if [ "$READ_FP" != "$FP" ]; then
-    echo "  ✗ в банке зарегистрирован ДРУГОЙ ключ (отпечаток ${READ_FP:-пусто}, наш $FP)."
-    echo "    Удалите приложение $CLIENT_ID в кабинете банка и запустите команду снова. .env не менял."
-    exit 1
-  fi
-  case "$READ_REDIRECT" in *"\"$REDIRECT\""*) ;; *)
-    echo "  ✗ адрес возврата в банке не совпал: $READ_REDIRECT"
-    echo "    Удалите приложение $CLIENT_ID в кабинете банка и запустите команду снова. .env не менял."
-    exit 1 ;;
-  esac
-  case "$READ_AUTH" in *private_key_jwt*) ;; *)
-    echo "  ✗ метод аутентификации в банке не private_key_jwt: $READ_AUTH"
-    echo "    Удалите приложение $CLIENT_ID в кабинете банка и запустите команду снова. .env не менял."
-    exit 1 ;;
-  esac
-  echo "  ✓ прочитано обратно: ключ (отпечаток $FP), адрес возврата и метод совпадают"
-else
-  echo "  ⚠ прочитать регистрацию обратно не удалось (HTTP ${READ_STATUS:-нет}) — записываю, но сверки не было"
+RETRY="    Удалите приложение $CLIENT_ID в кабинете банка и запустите команду снова. .env не менял."
+if [ "$READ_STATUS" != "200" ]; then
+  echo "  ✗ прочитать регистрацию обратно не удалось (HTTP ${READ_STATUS:-нет}) — без сверки не записываю."
+  echo "$RETRY"
+  exit 1
 fi
+if [ "$READ_FP" != "$FP" ]; then
+  echo "  ✗ в банке зарегистрирован ДРУГОЙ ключ (отпечаток ${READ_FP:-пусто}, наш $FP)."
+  echo "$RETRY"
+  exit 1
+fi
+case "$READ_REDIRECT" in *"\"$REDIRECT\""*) ;; *)
+  echo "  ✗ адрес возврата в банке не совпал: $READ_REDIRECT"
+  echo "$RETRY"
+  exit 1 ;;
+esac
+case "$READ_AUTH" in *'"private_key_jwt"'*) ;; *)
+  echo "  ✗ метод аутентификации в банке не private_key_jwt: $READ_AUTH"
+  echo "$RETRY"
+  exit 1 ;;
+esac
+echo "  ✓ прочитано обратно: ключ (отпечаток $FP), адрес возврата и метод совпадают"
 
 printf '\n── 5. Запись в .env ──\n'
 BACKUP=".env.bak.$(date +%Y%m%d%H%M%S)"
