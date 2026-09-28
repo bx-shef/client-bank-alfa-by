@@ -154,7 +154,15 @@ export function buildUfStoredFieldName(spTypeId: number, postfix: string): strin
  * попадали. То есть реестр держал данные, которые человек не видел.
  *
  * ⚠ `scope: 'C'` — общая настройка на всех пользователей портала, а не личная настройка того, кто
- * нажал кнопку: иначе бухгалтер увидел бы прежнюю пустую карточку.
+ * нажал кнопку: иначе бухгалтер увидел бы прежнюю пустую карточку. Но общей настройки МАЛО — её
+ * видят только те, кто не выбрал «для себя»; см. `buildPaymentCardForceCommonCall`.
+ *
+ * ⚠ ИМЕНА СТАНДАРТНЫХ ПОЛЕЙ — ИМЕНА РЕДАКТОРА КАРТОЧКИ, а не `crm.item.fields`. Замерено на коробке
+ * 2026-09-28 (`crm` 26.800.0): у смарт-процесса с клиентом и «моей компанией» редактор знает
+ * `CLIENT` («Клиент») и `MYCOMPANY_ID` («Реквизиты вашей компании»), а `COMPANY_ID`/`CONTACT_ID`
+ * среди его полей НЕТ. `set` имена не сверяет вовсе (проверяет только структуру) и незнакомое имя
+ * СОХРАНЯЕТ, а карточка такой элемент просто не рисует — поэтому клиент, записанный прежде как
+ * `COMPANY_ID`, пропал из карточки без единой ошибки.
  *
  * Порядок разделов — порядок вопросов к платежу: что это → между кем → откуда → что осталось.
  */
@@ -185,8 +193,9 @@ export function buildPaymentCardConfigCall(paymentSp: SpRef): { method: string, 
           type: 'section',
           elements: [
             // ⚠ Стандартные поля связи — они уже включены флагами типа (`isClientEnabled`,
-            // `isMycompanyEnabled`), но в раскладку по умолчанию не попадали.
-            { name: 'COMPANY_ID', optionFlags: 1 },
+            // `isMycompanyEnabled`), но в раскладку по умолчанию не попадали. Имена — редактора
+            // карточки (замер выше): `COMPANY_ID` здесь молча не рисовался бы.
+            { name: 'CLIENT', optionFlags: 1 },
             { name: 'MYCOMPANY_ID', optionFlags: 1 },
             { name: f(F.counterparty.postfix), optionFlags: 1 },
             { name: f(F.counterpartyAccount.postfix), optionFlags: 1 },
@@ -215,6 +224,25 @@ export function buildPaymentCardConfigCall(paymentSp: SpRef): { method: string, 
         }
       ]
     }
+  }
+}
+
+/**
+ * Довести общую раскладку карточки реестра до ВСЕХ сотрудников.
+ *
+ * ⚠ Замерено на коробке 2026-09-28: `set` со `scope: 'C'` пишет общую раскладку, но режим
+ * пользователя не переключает. Кто выбрал раскладку «для себя», продолжает видеть СВОЮ — и видит
+ * её и после нашего `set` (активный режим остался «личный», первый раздел — его). Только этот метод
+ * переводит всех на общую.
+ *
+ * ⚠ ЦЕНА названа: метод УДАЛЯЕТ личные раскладки этой карточки у всех сотрудников. Касается ровно
+ * карточки элемента «Платежи» — смарт-процесса, который создало приложение; карточки сделок,
+ * компаний и других смарт-процессов он не трогает.
+ */
+export function buildPaymentCardForceCommonCall(paymentSp: SpRef): { method: string, params: Record<string, unknown> } {
+  return {
+    method: 'crm.item.details.configuration.forceCommonScopeForAll',
+    params: { entityTypeId: paymentSp.entityTypeId }
   }
 }
 

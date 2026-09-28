@@ -17,6 +17,8 @@ export interface ProvisionResponse {
   created?: boolean
   addedFields?: number
   storedChanged?: boolean
+  /** Дошла ли раскладка карточки «Платежи» до всех сотрудников (лучшие усилия на сервере). */
+  cardConfigured?: boolean
   error?: string
 }
 
@@ -24,6 +26,8 @@ export function useProvisionDistribution() {
   const provisioning = ref(false)
   const error = ref('')
   const message = ref('')
+  /** Смарт-процессы на месте, но карточка настроена не до конца: не ошибка, но админ узнаёт сразу. */
+  const warning = ref('')
   /** entityTypeId созданных/найденных СП — из них строятся ссылки в портал. */
   const paymentSpEtid = ref<number | null>(null)
   const distributionSpEtid = ref<number | null>(null)
@@ -40,6 +44,7 @@ export function useProvisionDistribution() {
     enabled.value = a !== null
     error.value = ''
     message.value = ''
+    warning.value = ''
     if (!a) {
       error.value = 'Настройка смарт-процессов доступна только внутри портала Bitrix24'
       return
@@ -51,7 +56,17 @@ export function useProvisionDistribution() {
       // ссылками (см. ProvisionSpCard), а здесь остаётся только «что произошло».
       paymentSpEtid.value = Number(res?.paymentSpEtid) || null
       distributionSpEtid.value = Number(res?.distributionSpEtid) || null
-      message.value = res?.created ? 'Смарт-процессы созданы.' : 'Смарт-процессы уже были на месте.'
+      message.value = res?.created
+        ? 'Смарт-процессы созданы.'
+        : res?.cardConfigured === true
+          ? 'Смарт-процессы уже были на месте, раскладка карточки «Платежи» обновлена.'
+          : 'Смарт-процессы уже были на месте.'
+      // ⚠ Строго `false`: поле отсутствует у ответа сервера старше этой правки (образы статики и
+      // backend выкатываются порознь), и «не знаем» не должно читаться как «не удалось».
+      if (res?.cardConfigured === false) {
+        warning.value = 'Раскладку карточки «Платежи» применить не удалось: поля на месте и видны в '
+          + 'списке, но в карточке элемента их может не быть. Повторите настройку позже.'
+      }
     } catch (e) {
       // Map the backend's typed rejections to friendly copy; fall back to the generic message.
       const status = (e as { statusCode?: number, status?: number })?.statusCode ?? (e as { status?: number })?.status
@@ -63,5 +78,5 @@ export function useProvisionDistribution() {
     }
   }
 
-  return { provision, syncEnabled, provisioning, error, message, enabled, paymentSpEtid, distributionSpEtid }
+  return { provision, syncEnabled, provisioning, error, message, warning, enabled, paymentSpEtid, distributionSpEtid }
 }

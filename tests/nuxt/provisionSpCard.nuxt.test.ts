@@ -114,6 +114,29 @@ describe('ProvisionSpCard interaction', () => {
     expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('на месте')
   })
 
+  it('раскладка карточки не применилась → предупреждение, но успех остаётся успехом', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: true, cardConfigured: false })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="provision-button"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="provision-warning"]').text()).toContain('карточки «Платежи»')
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('созданы')
+    expect(wrapper.emitted('provisioned')).toHaveLength(1)
+  })
+
+  // ⚠ Поля нет у ответа сервера старше правки (статика и backend выкатываются порознь): «не знаем»
+  // не должно читаться как «не удалось».
+  it('ответ без cardConfigured — без предупреждения', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1044, distributionSpEtid: 1046, created: false })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="provision-button"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="provision-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toBe('Смарт-процессы уже были на месте.')
+  })
+
   it('404 больше не значит «отключено» — маршрут есть всегда', async () => {
     // ⚠ Ветку «отключена» убрали вместе с env-гейтом (2026-08-23): смарт-процесс «Платежи» это
     // реестр, а не опция, и режим приложения всегда «включено». Оставить прежний текст значило бы
@@ -172,5 +195,32 @@ describe('ProvisionSpCard — когда всё уже настроено', () =
     const wrapper = await mountReady()
     expect(wrapper.find('[data-testid="provision-button"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="provision-ready"]').exists()).toBe(false)
+  })
+})
+
+// ⚠ Смарт-процессы уже созданы — главной кнопки нет, но ПОВТОР остаётся (замечание владельца
+// 2026-09-28): иначе исправленная раскладка карточки «Платежи» не дошла бы до порталов, где
+// смарт-процессы уже есть, — провижининг применяет её только при запуске.
+describe('ProvisionSpCard: смарт-процессы уже на месте', () => {
+  it('главной кнопки нет, «Настроить заново» — есть, и она предупреждает о цене', async () => {
+    markProvisioned()
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-testid="provision-ready"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="provision-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="provision-rerun"]').exists()).toBe(true)
+    // Цена названа рядом с кнопкой: перевод на общую раскладку стирает личные настройки карточки.
+    expect(wrapper.find('[data-testid="provision-sp"]').text()).toContain('Личные настройки этой карточки')
+  })
+
+  it('«Настроить заново» зовёт тот же провижининг и говорит, что карточка обновлена', async () => {
+    markProvisioned()
+    fetchMock.mockResolvedValueOnce({ ok: true, paymentSpEtid: 1046, distributionSpEtid: 1048, created: false, addedFields: 0, cardConfigured: true })
+    const wrapper = await mountReady()
+    await wrapper.find('[data-testid="provision-rerun"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(fetchMock).toHaveBeenCalledWith('/api/distribution/provision', expect.objectContaining({ method: 'POST' }))
+    expect(wrapper.find('[data-testid="provision-message"]').text()).toContain('раскладка карточки «Платежи» обновлена')
+    expect(wrapper.emitted('provisioned')).toHaveLength(1)
   })
 })

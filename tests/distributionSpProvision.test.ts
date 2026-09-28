@@ -318,9 +318,67 @@ describe('раскладка карточки реестра (#27)', () => {
       .flatMap(s => s.elements.map(e => e.name))
     expect(names).toContain('UF_CRM7_OP_DATE')
     expect(names).toContain('UF_CRM7_PURPOSE')
-    expect(names, 'клиент не попал в карточку').toContain('COMPANY_ID')
-    expect(names, 'моя компания не попала в карточку').toContain('MYCOMPANY_ID')
+    // ⚠ Имена РЕДАКТОРА карточки, а не `crm.item.fields` (замер коробки 2026-09-28): «Клиент» —
+    // `CLIENT`. `COMPANY_ID` редактор не знает, `set` его молча сохраняет, а карточка не рисует —
+    // ровно так клиент и пропал из карточки без единой ошибки.
+    expect(names, 'клиент не попал в карточку').toContain('CLIENT')
+    expect(names, '«Реквизиты вашей компании» не попали в карточку').toContain('MYCOMPANY_ID')
+    expect(names, 'имя, которого нет в редакторе карточки').not.toContain('COMPANY_ID')
+    expect(names).not.toContain('CONTACT_ID')
     expect(names.some(n => n.startsWith('UF_CRM_7_')), 'форма СОЗДАНИЯ поля вместо хранимой').toBe(false)
+  })
+
+  // ⚠ Общая раскладка не видна тем, кто выбрал «для себя» (замер коробки 2026-09-28: после `set`
+  // активный режим пользователя остался личным). Только `forceCommonScopeForAll` переводит всех.
+  it('после общей раскладки она доводится до ВСЕХ — тем же смарт-процессом, строго после set', async () => {
+    const calls: Array<{ method: string, params: Record<string, unknown> }> = []
+    const call = async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      return { result: {} }
+    }
+    const res = await provisionDistributionSp(call as never, {
+      payment: { entityTypeId: 1038, id: 7 },
+      distribution: { entityTypeId: 1040, id: 8 }
+    })
+    const methods = calls.map(c => c.method)
+    const setAt = methods.indexOf('crm.item.details.configuration.set')
+    const forceAt = methods.indexOf('crm.item.details.configuration.forceCommonScopeForAll')
+    expect(forceAt, 'раскладка не доведена до сотрудников с личной настройкой').toBeGreaterThan(-1)
+    expect(forceAt, 'перевод на общую раньше самой общей раскладки').toBeGreaterThan(setAt)
+    // Смарт-процесс «Платежи», а не «Распределения»: у второго своей раскладки нет, и перевод на
+    // общую стёр бы личные настройки чужой карточки ради ничего.
+    expect(calls[forceAt]!.params).toEqual({ entityTypeId: 1038 })
+    expect(methods.filter(m => m === 'crm.item.details.configuration.forceCommonScopeForAll')).toHaveLength(1)
+    expect(res.cardConfigured).toBe(true)
+  })
+
+  it('отказ перевода на общую — раскладка НЕ считается применённой', async () => {
+    const call = async (method: string) => {
+      if (method === 'crm.item.details.configuration.forceCommonScopeForAll') throw new Error('нет прав')
+      return { result: {} }
+    }
+    const res = await provisionDistributionSp(call as never, {
+      payment: { entityTypeId: 1038, id: 7 },
+      distribution: { entityTypeId: 1040, id: 8 }
+    })
+    expect(res.cardConfigured).toBe(false)
+    expect(res.payment.entityTypeId).toBe(1038)
+  })
+
+  it('отказ общей раскладки — перевода на общую нет вовсе', async () => {
+    // Иначе всех перевели бы на общую раскладку, которой нет, — то есть на раскладку по умолчанию,
+    // стерев их личные настройки ради прежней пустой карточки.
+    const methods: string[] = []
+    const call = async (method: string) => {
+      methods.push(method)
+      if (method === 'crm.item.details.configuration.set') throw new Error('нет прав')
+      return { result: {} }
+    }
+    await provisionDistributionSp(call as never, {
+      payment: { entityTypeId: 1038, id: 7 },
+      distribution: { entityTypeId: 1040, id: 8 }
+    })
+    expect(methods).not.toContain('crm.item.details.configuration.forceCommonScopeForAll')
   })
 
   it('отказ настройки карточки НЕ роняет провижининг', async () => {
