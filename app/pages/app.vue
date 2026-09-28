@@ -651,6 +651,12 @@ const { status, refresh } = useImportStatus()
 
 // Admin gate (drives which setup banner shows). Resolved after useB24().init().
 const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
+// Кнопка «Настройки» и действие «Проверить настройки» — только тому, кто может настраивать (#775):
+// не-админ попадал в отказ «Настройки доступны только администратору».
+// ⚠ До проверки — скрыты: `useIsAdmin` закрыт по умолчанию, и иначе кнопка мелькала бы у не-админа.
+// ⚠ Вне портала (`?preview=1`, визуальные эталоны) — видны: админа там не спросить.
+const adminChecked = ref(false)
+const canOpenSettings = computed(() => adminChecked.value && (!inPortal.value || isAdmin.value))
 
 // Chat settings (shared singleton with the SettingsForm on /settings). Subscribe to the
 // cross-instance reload pull so a save in another open instance re-reads live. MUST run
@@ -759,6 +765,10 @@ onMounted(async () => {
   // Раньше статус запрашивался первым и всегда упирался в «нет токена» — баг маскировался
   // демо-моком, а с его удалением (#415) полоса статуса навсегда показывала бы «не запускалась».
   await b24.init()
+  // Сразу после рукопожатия: признак админа приходит в нём же и читается синхронно, а ждать
+  // `refresh()` значило бы показывать кнопку настроек с задержкой в сетевой запрос.
+  checkAdmin()
+  adminChecked.value = true
   if (!b24.isInit()) return
   // ⚠ `?preview=1` — рабочий экран, а не лаунчер. Флаг это дев-обход для разработки, скриншотов и
   // визуальных тестов: он существует ровно ради того, чтобы показать НАСТОЯЩИЙ экран без портала.
@@ -780,7 +790,6 @@ onMounted(async () => {
     launch.value = 'work'
   }
   await refresh()
-  checkAdmin()
   // «Последние операции» (#36) — реальный фид из реестра «Платежи». Не в критическом пути (список
   // может дорисоваться после `fitWindow`, как и статус): его отсутствие не должно задерживать
   // заголовок/подгонку фрейма.
@@ -870,10 +879,12 @@ watch(() => items.value.length, async () => {
             </B24Button>
 
             <B24Button
+              v-if="canOpenSettings"
               :icon="SettingsIcon"
               color="air-secondary-no-accent"
               size="sm"
               aria-label="Настройки"
+              data-testid="open-settings"
               @click="openSettings"
             >
               <span class="hidden sm:inline">Настройки</span>
@@ -992,6 +1003,7 @@ watch(() => items.value.length, async () => {
               <ImportStatusBanner
                 v-if="showStatusBanner"
                 :status="status"
+                :can-open-settings="canOpenSettings"
                 @open-settings="openSettings"
               />
               <!-- Промо-карточка «Нужна доработка» — НАШ cross-sell, в локальном режиме форка

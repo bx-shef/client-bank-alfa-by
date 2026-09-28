@@ -8,7 +8,11 @@ import { formatRelativeTime, importStateMeta, pluralRu } from '~/utils/importSta
 
 // Trust bar: one glance tells "alive / when updated / what reached people".
 // Colour = instant verdict. Presentational — the page owns the data.
-const props = defineProps<{ status: ImportRunSummary }>()
+const props = withDefaults(defineProps<{
+  status: ImportRunSummary
+  /** Может ли смотрящий открыть настройки. Не-админу действие вело бы в отказ (#775). */
+  canOpenSettings?: boolean
+}>(), { canOpenSettings: true })
 /** Открыть настройки просим страницу-владельца: как именно (слайдер портала или обычная
  *  навигация) — решает она, компонент об этом знать не должен. */
 const emit = defineEmits<{ openSettings: [] }>()
@@ -89,7 +93,7 @@ const chainLine = computed(() => {
     </template>
 
     <template
-      v-if="status.state === 'error'"
+      v-if="status.state === 'error' && canOpenSettings"
       #actions
     >
       <!-- Просим страницу открыть настройки. -->

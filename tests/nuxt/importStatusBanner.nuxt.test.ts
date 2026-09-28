@@ -61,6 +61,16 @@ describe('ImportStatusBanner', () => {
     expect(wrapper.text()).toContain('Проверить настройки')
   })
 
+  // ⚠ Не-админу действие вело бы в отказ «Настройки доступны только администратору» (#775):
+  // ошибку он видит, а кнопку, которая ему ничего не даст, — нет.
+  it('error без права открыть настройки: ошибка видна, действия «Проверить настройки» нет', async () => {
+    const wrapper = await mountSuspended(ImportStatusBanner, {
+      props: { status: make({ state: 'error', errors: ['Банк не ответил'] }), canOpenSettings: false }
+    })
+    expect(wrapper.text()).toContain('Банк не ответил')
+    expect(wrapper.text()).not.toContain('Проверить настройки')
+  })
+
   it('never: shows the "not run yet" label', async () => {
     const wrapper = await mountSuspended(ImportStatusBanner, {
       props: { status: make({ state: 'never' }) }

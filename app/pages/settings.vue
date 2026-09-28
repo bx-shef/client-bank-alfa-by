@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type { NavigationMenuItem } from '@bitrix24/b24ui-nuxt'
 import { useB24 } from '~/composables/useB24'
+import { useIsAdmin } from '~/composables/useIsAdmin'
 import { APP_SLIDER_PLACE_SETTINGS } from '~/config/b24'
 import { pageTitle } from '~/utils/landing'
 import { useLogger } from '~/utils/logger'
@@ -86,13 +87,26 @@ const { init, get, placementPlace, closeSlider } = useB24()
 // ⚠ Крестик рисует САМ портал — своего мы не ставим. Наше дело только кнопка «Отмена».
 const isSlider = ref(false)
 
+// Не-администратору — только отказ, без меню разделов и шапки раздела (#775). Меню обещало
+// возможность, которой у человека нет: кликается, а каждый раздел ведёт в тот же отказ.
+// ⚠ Пока проверка не прошла, рисуется обычная оболочка с заготовкой формы — ровно как до правки:
+// у админа (он открывает настройки чаще) раскладка не прыгает. Не-админ видит заготовку до конца
+// рукопожатия с порталом, а затем отказ.
+// ⚠ Вне портала (`?preview=1`, визуальные эталоны) оболочка остаётся: админа там не спросить.
+const { inPortal, isAdmin, check: checkAdmin } = useIsAdmin()
+const adminChecked = ref(false)
+const denied = computed(() => adminChecked.value && inPortal.value && !isAdmin.value)
+
 onMounted(async () => {
   try {
     await init()
+    checkAdmin()
     isSlider.value = placementPlace() === APP_SLIDER_PLACE_SETTINGS
     await get()?.parent.setTitle('Настройки')
   } catch (e) {
     log.warning('рукопожатие с порталом не состоялось', { error: String(e) })
+  } finally {
+    adminChecked.value = true
   }
   // ⚠ Раздел из адреса разбираем ВНЕ try: он не зависит ни от портала, ни от `setTitle`. Внутри
   // блока отказ `setTitle` глотал и его — и глубокая ссылка (её даёт экран готовности) молча
@@ -113,7 +127,13 @@ async function close(): Promise<void> {
 
 <template>
   <InPortalGate>
+    <SettingsAdminOnly
+      v-if="denied"
+      class="min-h-svh"
+      data-testid="settings-admin-only"
+    />
     <B24DashboardGroup
+      v-else
       unit="px"
       storage="local"
     >
