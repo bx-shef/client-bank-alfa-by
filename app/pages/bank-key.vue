@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import { useBankKeyScreen } from '~/composables/useBankKeyScreen'
 import { copyToClipboard } from '~/utils/clipboard'
+import { ALFA_BUSINESS_ONLINE_URL } from '~/utils/bankConnectInvite'
 import { pageTitle } from '~/utils/landing'
 
 // Экран ВЛАДЕЛЬЦА СЧЁТА: он выпустил ключ API в кабинете банка и вставляет его сюда (#19).
@@ -26,6 +27,9 @@ const screen = useBankKeyScreen()
 const apiKey = ref('')
 const token = ref('')
 const clientIdCopied = ref(false)
+// Подпись ссылки шага 1 — выражением, а не текстом в разметке: у многострочного элемента текст
+// внутри получил бы пробелы по краям, и перед точкой после ссылки встал бы лишний пробел.
+const bankOnlineName = 'Альфа Бизнес Онлайн'
 
 onMounted(async () => {
   await b24.init().catch(() => {})
@@ -84,20 +88,55 @@ async function onSubmit() {
 
       <template v-else-if="screen.ready.value">
         <!-- Инструкция ПОВТОРЯЕТСЯ здесь, а не только в сообщении чата: человек мог дойти сюда
-             через день и сообщение уже не искать. Надписи — дословно как в кабинете банка. -->
-        <div class="rounded-md bg-(--ui-color-base-8) p-3 text-sm text-(--ui-color-base-2)">
+             через день и сообщение уже не искать. Надписи — дословно как в кабинете банка.
+             ⚠ Снимки кабинета — те же, что во вложении сообщения, и после тех же шагов
+             (`GuideShotImage` читает общий манифест). Номера шагов здесь совпадают с номерами в
+             сообщении; компонент стоит в КАЖДОМ шаге, чтобы новый снимок не требовал правки
+             разметки. -->
+        <div
+          class="rounded-md bg-(--ui-color-base-8) p-3 text-sm text-(--ui-color-base-2)"
+          data-testid="key-steps"
+        >
           <p class="mb-2 font-semibold">
             Как получить ключ API
           </p>
-          <ol class="ml-4 list-decimal space-y-1">
-            <li>Войдите в <b>Альфа Бизнес Онлайн</b>.</li>
-            <li><b>Настройки</b> → вкладка <b>Open API</b> → кнопка <b>«Сгенерировать ключ API»</b>.</li>
+          <ol class="ml-4 list-decimal space-y-3">
             <li>
-              <b>НАЗВАНИЕ</b> — любое понятное, <b>CLIENT ID</b> — значение ниже,
-              <b>ТИП КЛЮЧА</b> — <b>Постоянный ключ</b>.
+              Войдите в
+              <B24Link
+                :href="ALFA_BUSINESS_ONLINE_URL"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="font-semibold"
+                data-testid="key-bank-link"
+              >
+                {{ bankOnlineName }}
+              </B24Link>.
+              <GuideShotImage :step="1" />
             </li>
-            <li>Согласиться с условиями и нажать <b>«Сгенерировать ключ»</b>.</li>
-            <li>Раскрыть строку ключа, нажать <b>«Скопировать ключ»</b> — и вставить его в поле ниже.</li>
+            <li>
+              <b>Настройки</b> → вкладка <b>Open API</b> → кнопка <b>«Сгенерировать ключ API»</b>.
+              <GuideShotImage :step="2" />
+            </li>
+            <li>
+              Заполните форму <b>«Генерация ключа API»</b>:
+              <!-- ⚠ По полю формы на строку — как в сообщении чата (замечание владельца 2026-09-28:
+                   одной строкой три поля читались «в одну кучу»). -->
+              <ul class="mt-1 ml-4 list-disc space-y-0.5">
+                <li><b>НАЗВАНИЕ</b> — любое понятное, например «Подключение к Б24»;</li>
+                <li><b>CLIENT ID</b> — значение ниже;</li>
+                <li><b>ТИП КЛЮЧА</b> — <b>Постоянный ключ</b>.</li>
+              </ul>
+              <GuideShotImage :step="3" />
+            </li>
+            <li>
+              Согласитесь с условиями и нажмите <b>«Сгенерировать ключ»</b>.
+              <GuideShotImage :step="4" />
+            </li>
+            <li>
+              Раскройте строку ключа, нажмите <b>«Скопировать ключ»</b> — и вставьте его в поле ниже.
+              <GuideShotImage :step="5" />
+            </li>
           </ol>
         </div>
 

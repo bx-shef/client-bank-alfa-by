@@ -13,6 +13,9 @@ const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url))
 
 const LINK = 'https://api.priorbank.by:9344/authorize?request=eyJ0eXAiOi'
 const KEY_LINK = 'https://client.bitrix24.by/marketplace/view/shef.bankimport/?params[place]=app-bank-key&params[t]=sig'
+// Та же ссылка внутри `[URL=…]`: квадратные скобки параметров закодированы, иначе закрыли бы тег.
+const KEY_LINK_BB = 'https://client.bitrix24.by/marketplace/view/shef.bankimport/?params%5Bplace%5D=app-bank-key&params%5Bt%5D=sig'
+const STEP6 = `6. Откройте [URL=${KEY_LINK_BB}]экран подключения банка (client.bitrix24.by)[/URL]`
 
 describe('приглашение Приорбанка', () => {
   const msg = buildPriorInvite({ link: LINK, ttlMin: 15 })!
@@ -68,6 +71,28 @@ describe('приглашение Приорбанка', () => {
     }
   })
 
+  // ⚠ Вид сообщения — текст владельца ДОСЛОВНО (2026-09-28): пустые строки между блоками и значки
+  // чата `:!:`/`:idea:`, которые портал рисует иконками. Сверка целиком: любое «улучшение» текста
+  // без владельца этот тест роняет — что и нужно.
+  it('совпадает с текстом владельца символ в символ', () => {
+    expect(msg).toBe([
+      '[B]Подключение банка «Приорбанк» к Битрикс24[/B]',
+      '',
+      'Администратор портала настраивает импорт выписки. Нужно ваше подтверждение как владельца счёта.',
+      '',
+      ':!: [B]Ссылка действует около 15 минут с момента отправки этого сообщения.[/B]',
+      '',
+      `1. Откройте [URL=${LINK}]страницу входа Приорбанка (api.priorbank.by)[/URL].`,
+      '2. Войдите логином и паролем от интернет-банка Приорбанка.',
+      '3. Подтвердите доступ приложения к выписке по счёту.',
+      '4. Откроется страница «Банк подключён» — это всё, вкладку можно закрыть. Счёт в приложении выберет администратор.',
+      '',
+      ':idea: Не успели или увидели «Не удалось подключить» — попросите администратора прислать новую ссылку.',
+      '',
+      ':!: Пароль от интернет-банка вводится только на сайте банка: приложение его не видит и не хранит.'
+    ].join('\n'))
+  })
+
   // Строка срока условна, а пустые строки-разделители — нет: без них инструкция слипается в абзац.
   it('без срока сообщение всё равно собирается, остаётся разбитым на блоки и не упоминает «не успели»', () => {
     const noTtl = buildPriorInvite({ link: LINK, ttlMin: 0 })!
@@ -107,10 +132,41 @@ describe('приглашение Альфа-Банка', () => {
   })
 
   // ⚠ Ссылка ведёт на НАШ экран внутри портала, а не на сайт банка: ключ вводится там, где выпущен.
-  it('несёт внутреннюю ссылку портала и запрещает пересылать ключ', () => {
-    expect(msg).toContain(KEY_LINK)
+  // Стоит она В ШАГЕ 6 (замечание владельца 2026-09-28): прежде ссылка была отдельно от шага, и
+  // дойдя до него, человек искал её по сообщению.
+  it('несёт внутреннюю ссылку портала в шаге 6 и запрещает пересылать ключ', () => {
+    expect(msg).toContain(STEP6)
+    expect(msg.split('\n').filter(l => /^\d\. /.test(l)).pop()).toContain(STEP6)
+    expect(msg).not.toContain(KEY_LINK) // голые скобки закрыли бы тег раньше времени
     expect(msg).toContain('Ключ никому не пересылайте')
     expect(msg).not.toContain('передайте его администратору')
+  })
+
+  // Замечание владельца 2026-09-28: «Войдите в Альфа Бизнес Онлайн» — это ссылка на кабинет.
+  it('шаг 1 ведёт в Альфа Бизнес Онлайн ссылкой', () => {
+    expect(msg).toContain('1. Войдите в [URL=https://online.alfabank.by/]Альфа Бизнес Онлайн[/URL].')
+  })
+
+  // Замечание владельца 2026-09-28: три поля формы одной строкой читались «в одну кучу».
+  it('шаг 3 — по полю формы на строку', () => {
+    const lines = msg.split('\n')
+    const at = lines.findIndex(l => l.startsWith('3. '))
+    expect(lines[at]).toContain('«Генерация ключа API»')
+    expect(lines.slice(at + 1, at + 4)).toEqual([
+      '• [B]НАЗВАНИЕ[/B] — любое понятное, например «Подключение к Б24»;',
+      '• [B]CLIENT ID[/B] — shef-bank-import;',
+      '• [B]ТИП КЛЮЧА[/B] — [B]Постоянный ключ[/B].'
+    ])
+  })
+
+  // Вид — как у сообщения Приорбанка по тексту владельца: пустые строки между блоками и значки
+  // `:!:`/`:idea:`. Примечания — ДО шагов, в тексте сообщения (см. раскладку со снимками ниже).
+  it('примечания со значками чата стоят до шагов', () => {
+    expect(msg).toContain(':!: [B]Ключ никому не пересылайте[/B]')
+    expect(msg).toContain(':!: [B]Ссылка на экран подключения действует около 24 ч')
+    expect(msg).toContain(':idea: Ключ бессрочный')
+    expect(msg.indexOf(':idea:')).toBeLessThan(msg.indexOf('1. '))
+    expect(msg.split('\n')[1]).toBe('') // пустая строка после заголовка
   })
 })
 
@@ -164,7 +220,7 @@ describe('картинки шагов к инструкции Альфы', () =>
 })
 
 // Раскладка «шаг — и сразу его снимок» (решение владельца 2026-09-26): шаги переезжают во вложение,
-// в тексте сообщения остаются вступление, ссылка и предупреждения.
+// в тексте сообщения остаются вступление и примечания; ссылка — в шаге 6, внизу вложения (2026-09-28).
 describe('инструкция Альфы со снимками кабинета', () => {
   const BASE = 'https://bank-import.example'
   const INPUT = { clientId: 'shef-bank-import', link: KEY_LINK, ttlHours: 24 }
@@ -173,6 +229,7 @@ describe('инструкция Альфы со снимками кабинета
   const images = blocks.filter((b): b is ChatImageBlock => 'IMAGE' in b)
   const texts = blocks.filter((b): b is ChatMessageBlock => 'MESSAGE' in b)
   const stepLines = texts.flatMap(b => b.MESSAGE.split('[BR]'))
+  const numbered = stepLines.filter(l => /^\d\. /.test(l))
 
   it('вложение — МАССИВ блоков, каждый с ОДНИМ ключом-типом', () => {
     // ⚠ Ровно на этом картинки однажды и потерялись. Портал знает две формы: полную
@@ -183,7 +240,7 @@ describe('инструкция Альфы со снимками кабинета
   })
 
   it('все шесть шагов во вложении по порядку, и за каждым снимком — его шаг', () => {
-    expect(stepLines.map(l => l.split('.')[0])).toEqual(['1', '2', '3', '4', '5', '6'])
+    expect(numbered.map(l => l.split('.')[0])).toEqual(['1', '2', '3', '4', '5', '6'])
     expect(images).toHaveLength(ALFA_KEY_SHOTS.length)
     ALFA_KEY_SHOTS.forEach((shot, i) => {
       const at = blocks.indexOf(images[i]!)
@@ -206,19 +263,33 @@ describe('инструкция Альфы со снимками кабинета
   })
 
   it('шаги — ТЕ ЖЕ, что в полном тексте: источник один', () => {
-    // Шаг 6 отличается одним словом: ссылка в полном тексте ниже шагов, а здесь — над вложением.
     const full = buildAlfaInvite(INPUT)!
-    for (const line of stepLines.slice(0, 5)) expect(full, line).toContain(line)
-    expect(stepLines[5]).toContain('ссылку выше')
+    for (const line of stepLines) expect(full, line).toContain(line)
     expect(stepLines.join('\n')).toContain('shef-bank-import')
   })
 
-  it('текст сообщения — вступление, ссылка и предупреждения, без шагов', () => {
-    expect(guide.text).toContain(KEY_LINK)
+  // ⚠ Ссылка — ВНИЗУ, в шаге 6 (замечание владельца 2026-09-28): прежде она стояла в тексте
+  // сообщения над вложением, и дойдя до последнего шага, человек листал сообщение вверх.
+  it('ссылка — в последнем шаге, внизу вложения, а в тексте сообщения её нет', () => {
+    const last = texts[texts.length - 1]!.MESSAGE.split('[BR]').pop()!
+    expect(last.startsWith(STEP6)).toBe(true)
+    expect(blocks[blocks.length - 1]).toBe(texts[texts.length - 1])
+    expect(guide.text).not.toContain(KEY_LINK)
+    expect(guide.text).not.toContain(KEY_LINK_BB)
+  })
+
+  it('текст сообщения — вступление и примечания, без шагов и без ссылки', () => {
     expect(guide.text).toContain('Ключ никому не пересылайте')
-    expect(guide.text).toContain('около 24 ч.')
+    expect(guide.text).toContain('около 24 ч')
     expect(guide.text).not.toMatch(/^\d\. /m)
     expect(guide.text).not.toContain('Open API')
+  })
+
+  // ⚠ Значки `:!:`/`:idea:` портал рисует иконками в ТЕКСТЕ сообщения (снимок владельца); рисует ли
+  // их блок вложения, не замерено. Поэтому во вложение они не попадают.
+  it('значки чата — только в тексте сообщения, во вложении их нет', () => {
+    expect(guide.text).toMatch(/:!:/)
+    for (const b of texts) expect(b.MESSAGE).not.toMatch(/:!:|:idea:/)
   })
 
   it('запасной текст — ПОЛНАЯ инструкция со всеми шагами', () => {
