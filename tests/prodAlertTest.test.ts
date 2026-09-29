@@ -43,6 +43,9 @@ http.createServer((req, res) => {
 const FAKE_DOCKER = String.raw`#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_ARGS"
 [ "${'$'}{FAKE_DOWN:-}" = 1 ] && { echo 'service "backend" is not running' >&2; exit 1; }
+# Настоящий docker compose с терминалом на stdin читает из него — ровно так команда зависла на
+# сервере 2026-09-29. Подставной делает то же, если ему достался терминал.
+[ -t 0 ] && cat >/dev/null
 case "$*" in
   *" backend node "*)
     while [ "$1" != node ]; do shift; done
@@ -219,6 +222,46 @@ describe('make alert-test', () => {
     expect(r.out).toContain('(make ps)')
     expect(r.out).toContain('service "backend" is not running')
   })
+
+  // Живой прогон 2026-09-29: сообщение ушло, а команда не завершилась, и Ctrl+C её не брал —
+  // docker compose унаследовал терминал как stdin, а timeout держит его в фоновой группе.
+  it('в настоящем терминале завершается сама — docker не получает терминал на stdin', () => {
+    const harness = String.raw`
+import os, pty, select, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp('bash', ['bash', sys.argv[1], 'docker compose -f docker-compose.prod.yml'])
+out, t = b'', time.time()
+while time.time() - t < 20:
+    r, _, _ = select.select([fd], [], [], 0.5)
+    if r:
+        try:
+            d = os.read(fd, 4096)
+        except OSError:
+            break
+        if not d:
+            break
+        out += d
+done, status = os.waitpid(pid, os.WNOHANG)
+if not done:
+    os.kill(pid, 9)
+sys.stdout.write(('EXIT %d ' % (os.waitstatus_to_exitcode(status) if done else -1)) + out.decode('utf-8', 'replace'))
+`
+    const r = spawnSync('python3', ['-c', harness, SCRIPT], {
+      cwd: dir,
+      env: {
+        PATH: `${join(dir, 'bin')}:${process.env.PATH}`,
+        FAKE_ARGS: join(dir, 'args-pty'),
+        ALERT_TEST_API: `http://127.0.0.1:${port}`,
+        CT_TOKEN: TOKEN,
+        CT_CHAT: 'ok'
+      },
+      encoding: 'utf8',
+      timeout: 40_000
+    })
+    expect(r.stdout, r.stdout).toMatch(/^EXIT 0 /)
+    expect(r.stdout).toContain('✓ сообщение отправлено')
+  }, 45_000)
 
   it('контейнер не ответил — просит проверить, запущен ли он', () => {
     const r = spawnSync('bash', [SCRIPT, 'false'], { cwd: dir, encoding: 'utf8', timeout: 30_000 })
