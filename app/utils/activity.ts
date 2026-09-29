@@ -80,6 +80,25 @@ export interface CrmCompanyRef {
 }
 
 /**
+ * A portal user id as the portal sends it — a positive safe integer, or its plain digit string —
+ * else `null`.
+ *
+ * ⚠ ONE strict parser for every place a user id reaches an activity (the company's responsible,
+ * the token owner, the builders themselves), because the portal does NOT validate the responsible:
+ * `crm.activity.todo.add` stores whatever it is given (box code reading 2026-09-28; a probe stored
+ * 0). `Number()` alone is not a check — it turns `true` into 1, `[17]` into 17, `'0x11'` into 17
+ * and `'1e1'` into 10, and a value past 2^53 silently loses digits. Each of those would become an
+ * activity on the wrong person, or on nobody.
+ */
+export function portalUserId(raw: unknown): number | null {
+  let n: number
+  if (typeof raw === 'number') n = raw
+  else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) n = Number(raw.trim())
+  else return null
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
+/**
  * One-line activity title, e.g. "Приход 1 840,00 BYN от ООО Ромашка".
  *
  * ⚠ БЕЗ ИМЕНИ КОНТРАГЕНТА предлог НЕ ставится: `.trim()` снимал только внешние пробелы, и

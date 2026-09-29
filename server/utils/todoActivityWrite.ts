@@ -33,7 +33,7 @@ import {
 } from '../../app/utils/legacyActivity'
 import { buildActivityBlocks, buildActivityBlocksCall } from '../../app/utils/activityBlocks'
 import type { PortalCurrencyFormats } from '../../app/utils/currencyFormat'
-import { CRM_OWNER_TYPE_COMPANY } from '../../app/utils/activity'
+import { CRM_OWNER_TYPE_COMPANY, portalUserId } from '../../app/utils/activity'
 import { dedupKey } from '../../app/utils/statement'
 import { findActivityByMarker } from './activityMarkerLookup'
 import type { RestCall } from './companyLookup'
@@ -151,7 +151,8 @@ async function verifyMarkerOnce(
     '[activity] the dedup marker did not stick: the activity was created and updated without error, '
     + 'but a search by ORIGINATOR_ID/ORIGIN_ID does not find it. Every operation would be written '
     + 'again on every run. Check that crm.activity.update may set these fields on this portal '
-    + '(pnpm activity:test --company <id> --apply).'
+    + '(pnpm activity:test --company <id> --apply), and that the app user can see activities assigned '
+    + 'to other users — the search runs with that user\'s CRM rights (a non-admin installer may not).'
   )
 }
 
@@ -204,17 +205,20 @@ export async function writeTodoActivityViaRest(
   sleep?: (ms: number) => Promise<void>,
   /** Откуда приехала операция — показывается блоком «Источник» (#729). Необязателен: без него
    *  блок honest-fallback'ом говорит «Импорт выписки», а не выдумывает банк. */
-  providerId?: BankProviderId
+  providerId?: BankProviderId,
+  /** Ответственный за компанию-владельца (решение владельца 2026-09-29). Не задан ⇒ `todo.add`
+   *  уходит без `responsibleId`, ровно как до этой правки. */
+  responsibleId?: number
 ): Promise<string | null> {
   // Портал уже показал, что нового метода у него нет — второй раз не спрашиваем (#722).
   if (memberId && legacyPortals.has(memberId)) {
-    return writeLegacyActivityViaRest(item, companyId, call, note, memberId, sleep)
+    return writeLegacyActivityViaRest(item, companyId, call, note, memberId, sleep, responsibleId)
   }
 
   // ⚠ Справочник валют берётся ДО создания дела, а не только для блоков: заголовок обязан
   // подписывать сумму так же, как таблица под ним (#729). Вызов кэширован на портал и не бросает.
   const currencies = await loadPortalCurrencies(call, memberId)
-  const params = buildTodoActivity(item, { id: Number(companyId) }, note, currencies)
+  const params = buildTodoActivity(item, { id: Number(companyId), assignedById: responsibleId }, note, currencies)
   let added: Record<string, unknown>
   try {
     added = await call(TODO_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
@@ -228,7 +232,7 @@ export async function writeTodoActivityViaRest(
       `crm.activity.todo.add is not available on this portal — falling back to ${LEGACY_ACTIVITY_ADD_METHOD}; `
       + 'дела будут создаваться системными (без цвета), направление видно в заголовке и описании'
     )
-    return writeLegacyActivityViaRest(item, companyId, call, note, memberId, sleep)
+    return writeLegacyActivityViaRest(item, companyId, call, note, memberId, sleep, responsibleId)
   }
   const id = extractTodoActivityId(added)
   // No id ⇒ nothing to mark and nothing to clean up. Returning null keeps the caller's existing
@@ -317,11 +321,14 @@ export async function writeLegacyActivityViaRest(
   call: RestCall,
   note?: string,
   memberId?: string,
-  sleep?: (ms: number) => Promise<void>
+  sleep?: (ms: number) => Promise<void>,
+  /** Ответственный за компанию-владельца; не задан ⇒ владелец токена (`resolveResponsibleId`). */
+  responsibleId?: number
 ): Promise<string | null> {
-  const responsibleId = await resolveResponsibleId(call, memberId)
+  // Разобрано строго, как и у основного носителя: портал ответственного не проверяет (замер коробки).
+  const responsible = portalUserId(responsibleId) ?? await resolveResponsibleId(call, memberId)
   const currencies = await loadPortalCurrencies(call, memberId)
-  const params = buildLegacyActivity(item, { id: Number(companyId) }, responsibleId, note, currencies)
+  const params = buildLegacyActivity(item, { id: Number(companyId) }, responsible, note, currencies)
   const added = await call(LEGACY_ACTIVITY_ADD_METHOD, params as unknown as Record<string, unknown>)
   const id = extractLegacyActivityId(added)
   if (!id) return null
@@ -337,23 +344,7 @@ export async function writeLegacyActivityViaRest(
   return id
 }
 
-/**
- * Ответственный за системное дело.
- *
- * ⚠ Поле ОБЯЗАТЕЛЬНОЕ именно у системного дела («The field RESPONSIBLE_ID is not defined or
- * invalid»), тогда как `todo.add` обходится без него и мы его не шлём вовсе. Значит на запасном
- * пути значение нужно взять откуда-то, а человека у фоновой обработки нет.
- *
- * ⚠ Берём владельца СОХРАНЁННОГО токена (`profile` → `ID`) — того, от чьего имени приложение и так
- * пишет всё остальное в этот портал (`PERMISSIONS.md`). Это не выбор «правильного» ответственного,
- * а единственное значение, которое у нас есть и которое заведомо существует на портале; назначать
- * дела по-другому — работа админа в самой CRM.
- *
- * ⚠ Один вызов на портал на процесс, и только на запасном пути: здоровый портал за это не платит
- * ничего. Отказ ПРОБРАСЫВАЕТСЯ — без ответственного вызов всё равно был бы отвергнут, и честный
- * ретрай лучше, чем подставленная единица (id 1 существует не на каждом портале и означал бы
- * «свалить дела клиента на случайного человека»).
- */
+/** Запасной ответственный системного дела по порталу — см. `resolveResponsibleId`. */
 const responsibleByPortal = new Map<string, number>()
 
 /** Для тестов: модульный кэш иначе протекает между случаями. */
@@ -403,14 +394,32 @@ async function loadPortalCurrencies(call: RestCall, memberId?: string): Promise<
   return formats
 }
 
+/**
+ * ЗАПАСНОЙ ответственный за системное дело — когда у компании-владельца его нет.
+ *
+ * ⚠ Поле ОБЯЗАТЕЛЬНОЕ именно у системного дела («The field RESPONSIBLE_ID is not defined or
+ * invalid»), тогда как `todo.add` без него обходится. Значит на запасном пути значение нужно взять
+ * откуда-то и тогда, когда ответственного у компании нет.
+ *
+ * ⚠ Основной ответственный — ответственный за КОМПАНИЮ (решение владельца 2026-09-29, приходит
+ * параметром). Сюда попадаем, только если его нет, и берём владельца СОХРАНЁННОГО токена (`profile`
+ * → `ID`) — того, от чьего имени приложение и так пишет всё остальное в этот портал
+ * (`PERMISSIONS.md`). Это не выбор «правильного» ответственного, а единственное значение, которое у
+ * нас есть и которое заведомо существует на портале.
+ *
+ * ⚠ Один вызов на портал на процесс, и только на запасном пути у компании без ответственного:
+ * здоровый портал за это не платит ничего. Отказ ПРОБРАСЫВАЕТСЯ — без ответственного вызов всё
+ * равно был бы отвергнут, и честный ретрай лучше, чем подставленная единица (id 1 существует не на
+ * каждом портале и означал бы «свалить дела клиента на случайного человека»).
+ */
 async function resolveResponsibleId(call: RestCall, memberId?: string): Promise<number> {
   const cached = memberId ? responsibleByPortal.get(memberId) : undefined
   if (cached) return cached
   const resp = await call('profile', {})
   const result = (resp as Record<string, unknown>)?.result
   const raw = result && typeof result === 'object' ? (result as Record<string, unknown>).ID : undefined
-  const id = Number(raw)
-  if (!Number.isInteger(id) || id <= 0) {
+  const id = portalUserId(raw)
+  if (id === null) {
     throw new Error('[activity] portal profile returned no usable ID — cannot set RESPONSIBLE_ID for crm.activity.add')
   }
   if (memberId) responsibleByPortal.set(memberId, id)

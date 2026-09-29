@@ -28,6 +28,10 @@ interface FakeOpts {
   company?: string | null
   /** my-company id returned by findMyCompany (default null = my company not found either). */
   myCompany?: string | null
+  /** ответственный по id компании (решение владельца 2026-09-29); нет записи ⇒ null. */
+  responsibles?: Record<string, number | null>
+  /** чтение ответственного падает — проверяем, что дело при этом не пишется. */
+  responsibleThrows?: boolean
   /** dedup keys already written (getActivityId returns a stored id for these). */
   alreadyWritten?: Set<string>
   /** #45: дозаливка колонок реестра падает (проверяем, что пачка при этом не рушится). */
@@ -90,7 +94,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false, autoEraseActivities: false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], unmatchedClaim: [], unmatchedSummary: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], unmatchedClaim: [], unmatchedSummary: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], responsible: [], activityResponsible: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -103,7 +107,13 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
       calls.findMy.push([it.docId, memberId])
       return o.myCompany ?? null
     },
-    writeActivity: async (it, companyId, memberId, note) => {
+    findCompanyResponsible: async (_it, companyId, memberId) => {
+      calls.responsible.push([companyId, memberId])
+      if (o.responsibleThrows) throw new Error('portal did not answer crm.item.get')
+      return o.responsibles?.[companyId] ?? null
+    },
+    writeActivity: async (it, companyId, memberId, note, _providerId, responsibleId) => {
+      calls.activityResponsible.push([it.docId, companyId, responsibleId ?? null])
       if (o.writeActivityFailFirst && calls.activityFails.length === 0) {
         calls.activityFails.push(it.docId)
         throw new Error('transient configurable.add failure')
@@ -2449,5 +2459,118 @@ describe('#579 привязки дела к сущностям CRM', () => {
       skipped: 0, excluded: 0, directionSkipped: 0, bindingsFailed: 0
     }, 'notable')
     expect(clean, 'ноль не должен превращаться в шум').not.toContain('без привязок')
+  })
+})
+
+// Решение владельца 2026-09-29: «ответственного ставь — ответственного клиента, то есть если за
+// компанию отвечает Вася — то и дело на Васе». То же правило стояло в PROCESSING.md §2 и раньше, а в
+// билдере даже было поле под него — но его никто не заполнял, и все дела ложились на владельца
+// токена, то есть на того, кто установил приложение.
+describe('ответственный дела — ответственный за компанию', () => {
+  const job = (items: StatementItem[]): CrmSyncJob => ({
+    memberId: 'M', providerId: 'alfa-by', source: 'fetch', batchId: 'b', items
+  })
+
+  it('клиент опознан ⇒ дело на ответственного клиента, и спрашиваем его один раз на пачку', async () => {
+    const { deps, calls } = fakeDeps({ company: 'CO', responsibles: { CO: 17 } })
+    await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
+    expect(calls.activityResponsible).toEqual([['d1', 'CO', 17], ['d2', 'CO', 17]])
+    // ⚠ Одна компания — один запрос: без памяти выписка на сотни строк дала бы сотни одинаковых.
+    expect(calls.responsible).toEqual([['CO', 'M']])
+  })
+
+  it('две компании в одной пачке ⇒ у каждого дела СВОЙ ответственный', async () => {
+    // ⚠ Мутация «ключ памяти — константа» проходила все тесты выше (находка ревью #780): там в пачке
+    // одна компания. Здесь неверный ключ отдал бы платёж клиента А ответственному клиента Б.
+    const { deps, calls } = fakeDeps({ responsibles: { CA: 11, CB: 22 } })
+    deps.findCompany = async it => (it.docId.startsWith('a') ? 'CA' : 'CB')
+    await handleCrmSyncJob(job([item('a1'), item('b1'), item('a2')]), deps)
+    expect(calls.activityResponsible).toEqual([['a1', 'CA', 11], ['b1', 'CB', 22], ['a2', 'CA', 11]])
+    expect(calls.responsible).toEqual([['CA', 'M'], ['CB', 'M']])
+  })
+
+  it('клиент и фолбэк «в мою компанию» в одной пачке — у каждой компании свой ответственный', async () => {
+    // Обычная боевая пачка: часть плательщиков опознана, часть нет (находка QA панели #780).
+    const { deps, calls } = fakeDeps({ myCompany: 'MY', responsibles: { CO: 17, MY: 3 } })
+    deps.findCompany = async it => (it.docId === 'd1' ? 'CO' : null)
+    await handleCrmSyncJob(job([item('d1'), item('d2'), item('d3')]), deps)
+    expect(calls.activityResponsible).toEqual([['d1', 'CO', 17], ['d2', 'MY', 3], ['d3', 'MY', 3]])
+    expect(calls.responsible).toEqual([['CO', 'M'], ['MY', 'M']])
+  })
+
+  it('«у компании нет ответственного» тоже запоминается на прогон', async () => {
+    const { deps, calls } = fakeDeps({ company: 'CO' })
+    await handleCrmSyncJob(job([item('d1'), item('d2')]), deps)
+    expect(calls.responsible).toEqual([['CO', 'M']])
+  })
+
+  it('клиент не опознан ⇒ ответственный МОЕЙ компании — в неё и пишется дело (PROCESSING.md §2 C.2)', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: 'MY', responsibles: { MY: 3 } })
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.activityResponsible).toEqual([['d1', 'MY', 3]])
+  })
+
+  it('записать некуда ⇒ ответственного не спрашиваем вовсе', async () => {
+    const { deps, calls } = fakeDeps({ company: null, myCompany: null })
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.responsible).toEqual([])
+  })
+
+  it('у компании нет ответственного ⇒ дело уходит без него, как до этой правки', async () => {
+    const { deps, calls } = fakeDeps({ company: 'CO' })
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.activityResponsible).toEqual([['d1', 'CO', null]])
+  })
+
+  it('чтение ответственного упало ⇒ джоба падает ДО любых записей (чистый повтор)', async () => {
+    // ⚠ Дело без ответственного здесь хуже повтора: оно легло бы на владельца токена, и никто бы не
+    // узнал, что это сбой, а не правило. Постоянный отказ портала сюда не доходит — его
+    // `readCompanyResponsible` превращает в «без ответственного».
+    //
+    // ⚠ И ДО реестра (находка ревью #780): чтение стоит сразу после поиска клиента, раньше
+    // побочных эффектов. После проведённой оплаты повтор уже не чистый — `isTargetApplied`
+    // пропустит мутацию, и `distributed` за операцию не посчитается. Разнесение идёт после реестра,
+    // поэтому пустой реестр доказывает и его.
+    const spCfg: RecognitionSettings = {
+      alphabet: 'cyrillic', matrices: [],
+      configFields: { 'payment-sp': '1044', 'payment-sp-id': '44', 'distribution-sp': '1046', 'distribution-sp-id': '46' }
+    }
+    const { deps, calls } = fakeDeps({ company: 'CO', responsibleThrows: true, recognition: spCfg })
+    await expect(handleCrmSyncJob(job([item('d1')]), deps)).rejects.toThrow('crm.item.get')
+    expect(calls.registry).toEqual([])
+    expect(calls.activity).toEqual([])
+  })
+
+  it('повторная доставка после сбоя чтения — ровно одно дело и на верном ответственном', async () => {
+    // Это и есть обещанный «безопасный повтор»: упавшая доставка не оставила дела, а следующая
+    // записала его один раз и туда, куда надо.
+    const { deps, calls } = fakeDeps({ company: 'CO', responsibles: { CO: 17 } })
+    const lookup = deps.findCompanyResponsible
+    let failedOnce = false
+    deps.findCompanyResponsible = async (...a) => {
+      if (!failedOnce) {
+        failedOnce = true
+        throw new Error('portal did not answer crm.item.get')
+      }
+      return lookup(...a)
+    }
+    const j = job([item('d1')])
+    await expect(handleCrmSyncJob(j, deps)).rejects.toThrow('crm.item.get')
+    await handleCrmSyncJob(j, deps)
+    expect(calls.activity).toHaveLength(1)
+    expect(calls.activityResponsible).toEqual([['d1', 'CO', 17]])
+  })
+
+  it('память — на прогон: следующий прогон спрашивает заново (ответственного переназначают)', async () => {
+    const { deps, calls } = fakeDeps({ company: 'CO', responsibles: { CO: 17 } })
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    await handleCrmSyncJob(job([item('d2')]), deps)
+    expect(calls.responsible).toEqual([['CO', 'M'], ['CO', 'M']])
+  })
+
+  it('уже записанная операция ответственного не спрашивает — повторный опрос не платит за него', async () => {
+    const { deps, calls } = fakeDeps({ company: 'CO', responsibles: { CO: 17 }, alreadyWritten: new Set([dedupKey(item('d1'))]) })
+    await handleCrmSyncJob(job([item('d1')]), deps)
+    expect(calls.responsible).toEqual([])
   })
 })

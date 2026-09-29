@@ -53,6 +53,13 @@ describe('buildTodoActivity', () => {
     expect(buildTodoActivity(item(), { id: 42, assignedById: 9 }).responsibleId).toBe(9)
   })
 
+  it('непригодный ответственный не уходит вовсе — портал сохранил бы и его (замер коробки)', () => {
+    // Истинностная проверка пропускала -3 и 1.5: дело легло бы «ни на кого».
+    for (const bad of [-3, 1.5, 0, Number.NaN]) {
+      expect('responsibleId' in buildTodoActivity(item(), { id: 42, assignedById: bad })).toBe(false)
+    }
+  })
+
   it('срок штампуется таймзоной портала, а не голым UTC', () => {
     expect(buildTodoActivity(item(), { id: 1 }).deadline).toContain('+03:00')
   })

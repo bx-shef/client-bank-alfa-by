@@ -49,6 +49,20 @@ describe('writeTodoActivityViaRest', () => {
     expect(calls).toEqual([TODO_ACTIVITY_ADD_METHOD, ACTIVITY_UPDATE_METHOD, ACTIVITY_BLOCKS_SET_METHOD])
   })
 
+  it('ответственный компании уходит в todo.add; без него параметра нет вовсе (решение 2026-09-29)', async () => {
+    const sent: Record<string, unknown>[] = []
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === TODO_ACTIVITY_ADD_METHOD) sent.push(params)
+      return method === TODO_ACTIVITY_ADD_METHOD ? { result: { id: 7 } } : { result: true }
+    })
+    await writeTodoActivityViaRest(item(), '42', call, undefined, undefined, undefined, undefined, 17)
+    await writeTodoActivityViaRest(item(), '42', call)
+    expect(sent[0]).toMatchObject({ ownerId: 42, responsibleId: 17 })
+    // ⚠ Отсутствие — не `responsibleId: undefined` и не 0: портал ответственного не проверяет и
+    // сохранил бы что дали (замер коробки), то есть дело осталось бы вовсе без ответственного.
+    expect('responsibleId' in sent[1]!).toBe(false)
+  })
+
   it('ЗАГОЛОВОК дела подписывает сумму справочником ПОРТАЛА, а не своим (#729)', async () => {
     // ⚠ Мутационно проверено: без этого случая «уронить справочник по дороге до заголовка»
     // проходило зелёным — блоки-то формат получали, и расхождение было видно только на живой

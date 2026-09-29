@@ -5,6 +5,7 @@ import {
   formatIsoDate,
   formatMoney,
   neutralizeBb,
+  portalUserId,
   toPortalDeadline
 } from '~/utils/activity'
 
@@ -77,5 +78,25 @@ describe('toPortalDeadline', () => {
   it('passes an unrecognized value through unchanged', () => {
     expect(toPortalDeadline('')).toBe('')
     expect(toPortalDeadline('not-a-date')).toBe('not-a-date')
+  })
+})
+
+// Портал ответственного НЕ проверяет — сохраняет, что дали (замер коробки 2026-09-28). Значит
+// всё, что уходит в дело как id сотрудника, обязано пройти здесь.
+describe('portalUserId', () => {
+  it('число и строка из цифр — это id', () => {
+    expect(portalUserId(17)).toBe(17)
+    expect(portalUserId('17')).toBe(17)
+    expect(portalUserId(' 17 ')).toBe(17)
+  })
+
+  it.each([
+    ['ноль', 0], ['отрицательное', -3], ['дробное', 1.5], ['NaN', Number.NaN], ['бесконечность', Infinity],
+    ['за пределом безопасного целого', 2 ** 53 + 2], ['1e21', 1e21],
+    // `Number()` превратил бы их в 1, 17, 17 и 10 — то есть в дело на постороннего человека.
+    ['булево', true], ['массив', [17]], ['шестнадцатеричная строка', '0x11'], ['экспонента строкой', '1e1'],
+    ['пустая строка', ''], ['null', null], ['undefined', undefined], ['объект', { id: 17 }]
+  ])('%s — не id', (_label, raw) => {
+    expect(portalUserId(raw)).toBeNull()
   })
 })

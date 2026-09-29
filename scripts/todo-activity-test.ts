@@ -13,6 +13,8 @@
 //         --company <id> [--apply]
 // (wired as `pnpm activity:test`). DRY-RUN by default (prints the params, writes nothing).
 // --apply actually creates the activity, then searches the marker to prove the dedup round-trip.
+// ⚠ TEST PORTALS ONLY: --apply leaves a synthetic payment activity behind, and since 2026-09-29 it
+// lands on the company's responsible — on a live portal that is a real colleague's to-do list.
 
 import { loadDotEnv } from './lib/env.mjs'
 import { C, head, ok, warn, err } from './lib/cli.mjs'
@@ -24,6 +26,7 @@ import { buildTodoActivity, ACTIVITY_ORIGINATOR_ID, activityOriginId } from '../
 import { buildLegacyActivity } from '../app/utils/legacyActivity.ts'
 import { writeTodoActivityViaRest, writeLegacyActivityViaRest } from '../server/utils/todoActivityWrite.ts'
 import { findActivityByMarker } from '../server/utils/activityMarkerLookup.ts'
+import { readCompanyResponsible } from '../server/utils/companyLookup.ts'
 
 loadDotEnv(['.env.b24oauth', '.env.b24test'], { explicit: false })
 
@@ -91,6 +94,9 @@ async function main() {
   const originId = activityOriginId(item)
   console.log(`${C.dim}маркер: ORIGINATOR_ID=${ACTIVITY_ORIGINATOR_ID} · ORIGIN_ID=${originId}${C.reset}`)
   console.log(`${C.dim}params:${C.reset} ${JSON.stringify(params, null, 2)}`)
+  // The responsible is read from the portal, which DRY-RUN never touches — the printed params do not
+  // show it (and the fallback carrier's placeholder 0 is exactly the value the portal would store).
+  console.log(`${C.dim}ответственный в DRY-RUN не читается — при --apply: ответственный компании${legacy ? ', без него — владелец токена' : ''}${C.reset}`)
 
   if (!apply) {
     warn('DRY-RUN — ничего не пишем. Добавь --company <id> --apply, чтобы создать дело и проверить дедуп.')
@@ -112,18 +118,40 @@ async function main() {
   if (before) warn(`маркер уже есть (дело #${before}) — прошлый прогон; дедуп сработает, повторно писать не будем`)
 
   // 2) write (unless dedup already found it — mirrors crm-sync's read-before-write).
+  // The responsible is the company's own, read the way crm-sync reads it (owner's decision
+  // 2026-09-29) — otherwise the smoke would prove a call crm-sync no longer makes.
+  const responsibleId = await readCompanyResponsible(companyId, call)
+  const noResponsible = legacy ? 'нет — у системного дела будет владелец токена' : 'нет — дело уйдёт без responsibleId'
+  console.log(`${C.dim}ответственный компании: ${responsibleId ?? noResponsible}${C.reset}`)
   let createdId = before
   if (!before) {
     createdId = legacy
-      ? await writeLegacyActivityViaRest(item, companyId, call, undefined, memberId)
+      ? await writeLegacyActivityViaRest(item, companyId, call, undefined, memberId, undefined, responsibleId ?? undefined)
       // memberId is passed on purpose: it enables BOTH the marker self-check and the portal
       // currency dictionary (#729) — without it the smoke would exercise a path crm-sync never takes.
-      : await writeTodoActivityViaRest(item, companyId, call, undefined, memberId)
+      : await writeTodoActivityViaRest(item, companyId, call, undefined, memberId, undefined, undefined, responsibleId ?? undefined)
     if (!createdId) {
       err('todo.add не вернул id (проверь права/контекст приложения)')
       process.exit(1)
     }
     ok(`создано дело #${createdId} (компания ${companyId})`)
+  }
+
+  // 2b) read the responsible back — also on an activity a previous run left behind (the marker key
+  // is fixed): the smoke asserts the CURRENT rule for whatever activity carries the marker, so a
+  // stale one from before the rule must go red rather than pass unchecked. REST echoes what it
+  // stored and the portal does not validate this field (box code reading 2026-09-28), so only the
+  // read-back shows what the card shows.
+  if (responsibleId) {
+    const got = await call('crm.activity.get', { id: Number(createdId) })
+    const stored = Number((got?.result as Record<string, unknown> | undefined)?.RESPONSIBLE_ID)
+    if (stored === responsibleId) {
+      ok(`ответственный дела = ответственный компании (#${stored})`)
+    } else {
+      err(`ответственный дела #${stored}, а у компании #${responsibleId}`)
+      if (before) err(`дело #${before} оставил прошлый прогон — удалите его и запустите снова`)
+      process.exit(1)
+    }
   }
 
   // 3) post-search: the marker must now find exactly our activity (dedup round-trip).
