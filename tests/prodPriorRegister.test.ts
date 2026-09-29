@@ -103,8 +103,8 @@ describe('чистые функции', () => {
         'AAAA',
         '-----END PRIVATE KEY-----',
         '"',
-        "PRIOR_OAUTH_CLIENT_SECRET='s",
-        "t'",
+        'PRIOR_OAUTH_CLIENT_SECRET=\'s',
+        't\'',
         'PRIOR_OAUTH_AUDIENCE="-----BEGIN x\\n',
         '"',
         'B=2'
