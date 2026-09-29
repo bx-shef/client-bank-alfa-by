@@ -76,7 +76,12 @@ echo "== Оповещения оператору: пробное сообщен�
 # carry the token: the token is in no argument and node prints nothing about the request.
 ERR="$(mktemp /tmp/alert-test-err.XXXXXX)"
 trap 'rm -f "$ERR"' EXIT
-OUT="$(timeout 45 $DC exec -T backend node -e "$JS" "$API" 2>"$ERR")"
+# ⚠ stdin is /dev/null, and this is load-bearing (live run 2026-09-29): without it `docker compose
+# exec` inherits the TERMINAL as stdin. `timeout` runs it in a background process group, a read from
+# the terminal stops it (SIGTTIN), and the command hung after the message had already been sent —
+# Ctrl+C did not reach it. `-k 5` kills it outright if it outlives the timeout anyway.
+OUT="$(timeout -k 5 45 $DC exec -T backend node -e "$JS" "$API" </dev/null 2>"$ERR")"
+RC=$?
 field() { printf '%s\n' "$OUT" | sed -n "s/^ALERT_$1=//p" | head -1; }
 STATE="$(field STATE)"
 
@@ -113,6 +118,9 @@ case "$STATE" in
     echo "    После правки .env — make prod-up и снова make alert-test."
     exit 1 ;;
   *)
+    if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+      echo "  ✗ контейнер backend не ответил за 45 секунд — проверка прервана."
+    fi
     echo "  ✗ не удалось выполнить проверку в контейнере backend — он запущен? (make ps)"
     if [ -s "$ERR" ]; then echo "    ответ docker:"; tail -n 5 "$ERR" | sed 's/^/      /'; fi
     exit 1 ;;
