@@ -13,6 +13,7 @@
 /scripts/oauth-refresh-probe.sh
 /scripts/prior-host-probe.sh
 /scripts/prior-switch-host.sh
+/scripts/prod-alert-test.sh
 /scripts/prod-alfa-currency-probe.sh
 /scripts/prod-alfa-page-probe.sh
 /scripts/prod-bank-history.sh
