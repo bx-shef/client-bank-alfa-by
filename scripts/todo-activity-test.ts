@@ -24,6 +24,7 @@ import { buildTodoActivity, ACTIVITY_ORIGINATOR_ID, activityOriginId } from '../
 import { buildLegacyActivity } from '../app/utils/legacyActivity.ts'
 import { writeTodoActivityViaRest, writeLegacyActivityViaRest } from '../server/utils/todoActivityWrite.ts'
 import { findActivityByMarker } from '../server/utils/activityMarkerLookup.ts'
+import { readCompanyResponsible } from '../server/utils/companyLookup.ts'
 
 loadDotEnv(['.env.b24oauth', '.env.b24test'], { explicit: false })
 
@@ -112,18 +113,33 @@ async function main() {
   if (before) warn(`маркер уже есть (дело #${before}) — прошлый прогон; дедуп сработает, повторно писать не будем`)
 
   // 2) write (unless dedup already found it — mirrors crm-sync's read-before-write).
+  // The responsible is the company's own, read the way crm-sync reads it (owner's decision
+  // 2026-09-29) — otherwise the smoke would prove a call crm-sync no longer makes.
+  const responsibleId = await readCompanyResponsible(companyId, call)
+  console.log(`${C.dim}ответственный компании: ${responsibleId ?? 'нет — дело уйдёт без responsibleId'}${C.reset}`)
   let createdId = before
   if (!before) {
     createdId = legacy
-      ? await writeLegacyActivityViaRest(item, companyId, call, undefined, memberId)
+      ? await writeLegacyActivityViaRest(item, companyId, call, undefined, memberId, undefined, responsibleId ?? undefined)
       // memberId is passed on purpose: it enables BOTH the marker self-check and the portal
       // currency dictionary (#729) — without it the smoke would exercise a path crm-sync never takes.
-      : await writeTodoActivityViaRest(item, companyId, call, undefined, memberId)
+      : await writeTodoActivityViaRest(item, companyId, call, undefined, memberId, undefined, undefined, responsibleId ?? undefined)
     if (!createdId) {
       err('todo.add не вернул id (проверь права/контекст приложения)')
       process.exit(1)
     }
     ok(`создано дело #${createdId} (компания ${companyId})`)
+    // Read the responsible back: REST echoes what it stored, and the portal does not validate
+    // this field (box code reading 2026-09-28), so only the read-back shows what the card shows.
+    if (responsibleId) {
+      const got = await call('crm.activity.get', { id: Number(createdId) })
+      const stored = Number((got?.result as Record<string, unknown> | undefined)?.RESPONSIBLE_ID)
+      if (stored === responsibleId) ok(`ответственный дела = ответственный компании (#${stored})`)
+      else {
+        err(`ответственный дела #${stored}, а у компании #${responsibleId}`)
+        process.exit(1)
+      }
+    }
   }
 
   // 3) post-search: the marker must now find exactly our activity (dedup round-trip).

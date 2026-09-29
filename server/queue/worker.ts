@@ -56,7 +56,7 @@ import { resolveOpLogMode, runSummaryLine } from '../../app/utils/opLogPolicy'
 import { useServerLogger } from '../utils/serverLogger'
 import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
-import { findCompanyByAccount, findMyCompanyByAccount } from '../utils/companyLookup'
+import { findCompanyByAccount, findMyCompanyByAccount, readCompanyResponsible } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { writePaymentRegistryViaRest, backfillPaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { bindActivityViaRest } from '../utils/activityBindingsWrite'
@@ -239,11 +239,18 @@ export function liveHandlerDeps(): HandlerDeps {
     // no company → no owner / unknown portal). The activity carries the ORIGINATOR_ID/ORIGIN_ID
     // dedup marker (#259), so idempotency lives in B24 (getActivityId searches it) — no store.
     // `note` prepends a reason block (UNMATCHED-client fallback to my company, #91).
-    writeActivity: async (item, companyId, memberId, note, providerId) => {
+    writeActivity: async (item, companyId, memberId, note, providerId, responsibleId) => {
       if (isDemoAccount(item.account) || !companyId) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
-      return writeTodoActivityViaRest(item, companyId, call, note, memberId, undefined, providerId)
+      return writeTodoActivityViaRest(item, companyId, call, note, memberId, undefined, providerId, responsibleId)
+    },
+    // Ответственный за компанию — на него ставится дело (решение владельца 2026-09-29). Тот же
+    // мемоизированный на портал клиент, что у findCompany; нет токена портала → null.
+    findCompanyResponsible: async (companyId, memberId) => {
+      const call = await resolvePortalCall(memberId)
+      if (!call) return null
+      return readCompanyResponsible(companyId, call)
     },
     // Привязки дела к сущностям CRM (#579). ЛУЧШИЕ УСИЛИЯ и НИКОГДА не бросает — контракт зепа.
     //

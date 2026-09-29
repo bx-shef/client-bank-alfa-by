@@ -14,7 +14,8 @@
 // Two entry points share steps 1–2: `findCompanyByAccount` (the counterparty by
 // their account) and `findMyCompanyByAccount` (OUR company by OUR account — Этап C,
 // same resolution + an `isMyCompany='Y'` filter). «My company» is a Company with
-// `isMyCompany='Y'` (confirmed live), not a separate entity.
+// `isMyCompany='Y'` (confirmed live), not a separate entity. `readCompanyResponsible` then reads
+// the responsible of whichever company the activity goes to — the activity is put on that person.
 
 /** CRM entity type id for a Company (Lead=1, Deal=2, Contact=3, Company=4). */
 export const CRM_ENTITY_TYPE_COMPANY = 4
@@ -203,4 +204,35 @@ export async function findMyCompanyByAccount(account: string, call: RestCall): P
   if (!companyIds.length) return null
   const mine = await call('crm.item.list', myCompanyFilter(companyIds))
   return extractItemIds(mine)[0] ?? null
+}
+
+/**
+ * The company's responsible user (`assignedById`) — the activity for an operation is put on that
+ * person (owner's decision 2026-09-29: «если за компанию отвечает Вася — то и дело на Васе»). The
+ * same rule already stood in docs/PROCESSING.md §2 («ответственным записи остаётся ответственный за
+ * клиента/мою компанию»); the builder had the field, nothing filled it, so every activity landed on
+ * the token owner — the person who installed the app.
+ *
+ * `crm.item.get` rather than a filtered `crm.item.list`: it reads BY ID, so there is no filter to
+ * be silently ignored (the failure `matchingEntityIds` exists for — an ignored filter returns the
+ * portal's FIRST company, and its responsible would get someone else's payment).
+ *
+ * Returns `null` when the company has no usable responsible (absent / non-positive): the caller
+ * then sends no responsible at all, exactly as before this change. A transport error PROPAGATES:
+ * the call runs BEFORE the activity is written, so a throw is a clean job retry, same as
+ * `findCompanyByAccount`.
+ *
+ * ⚠ The non-positive guard is load-bearing: `crm.activity.todo.add` does NOT validate the
+ * responsible, it stores whatever it is given (read in the box's controller code, crm 26.800.0; a
+ * probe there stored 0). A bad value would therefore create an activity with nobody responsible
+ * instead of failing. For the same reason a DEACTIVATED user is accepted too — the activity follows
+ * the company, and moving a former employee's companies to someone else is the admin's job in CRM.
+ */
+export async function readCompanyResponsible(companyId: string, call: RestCall): Promise<number | null> {
+  const id = Number(companyId)
+  if (!Number.isInteger(id) || id <= 0) return null
+  const resp = await call('crm.item.get', { entityTypeId: CRM_ENTITY_TYPE_COMPANY, id })
+  const item = (resp?.result as Record<string, unknown> | undefined)?.item as Record<string, unknown> | undefined
+  const responsible = Number(item?.assignedById)
+  return Number.isInteger(responsible) && responsible > 0 ? responsible : null
 }

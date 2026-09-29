@@ -96,8 +96,14 @@ export interface HandlerDeps {
    *  no company matched, so there's no owner). Optional `note` prepends a reason block —
    *  used for the UNMATCHED-client fallback written to my company (#91). */
   /** ⚠ `providerId` едет сюда ради блока «Источник» на карточке (#729): в `StatementItem` его нет,
-   *  он свойство ПАЧКИ, а не операции. */
-  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string, providerId?: BankProviderId) => Promise<string | null>
+   *  он свойство ПАЧКИ, а не операции. `responsibleId` — ответственный за компанию-владельца дела
+   *  (`findCompanyResponsible`); не задан ⇒ дело ложится на владельца токена, как раньше. */
+  writeActivity: (item: StatementItem, companyId: string | null, memberId: string, note?: string, providerId?: BankProviderId, responsibleId?: number) => Promise<string | null>
+  /** Ответственный за компанию (`assignedById`) — на него ставится дело (решение владельца
+   *  2026-09-29). `null` — ответственного у компании нет (или у портала нет токена); тогда дело
+   *  ложится на владельца токена. Ошибка транспорта ПРОБРАСЫВАЕТСЯ: вызов идёт ДО записи
+   *  дела, и бросок означает чистый повтор джобы, как у `findCompany`. */
+  findCompanyResponsible: (companyId: string, memberId: string) => Promise<number | null>
   /**
    * Registry write (#575): ensure the payment SP carries an element for THIS operation.
    *
@@ -509,6 +515,25 @@ export async function handleCrmSyncJob(
     myCompanyByAccount.set(item.account, found)
     return found
   }
+  /**
+   * Ответственный за компанию — запоминается на прогон (решение владельца 2026-09-29: «если за
+   * компанию отвечает Вася — то и дело на Васе»).
+   *
+   * ⚠ Память на ПРОГОН, а не на процесс: ответственного переназначают, и кэш на процесс ставил бы
+   * дела ПРЕЖНЕМУ ответственному до перезапуска воркера. На прогон — ровно столько,
+   * сколько нужно: при фолбэке «в мою компанию» вся пачка ложится на одну компанию, и без памяти
+   * выписка на сотни строк дала бы сотни одинаковых запросов.
+   *
+   * ⚠ Отрицательный ответ кэшируется тоже: «у компании нет ответственного» — состояние портала.
+   */
+  const responsibleByCompany = new Map<string, number | null>()
+  const resolveResponsible = async (companyId: string): Promise<number | null> => {
+    const cached = responsibleByCompany.get(companyId)
+    if (cached !== undefined) return cached
+    const found = await deps.findCompanyResponsible(companyId, job.memberId)
+    responsibleByCompany.set(companyId, found)
+    return found
+  }
   let unmatched = 0
   let landed = 0
   // Номер распознан, компания найдена, а цели в CRM нет (#421). Раньше этот случай не попадал
@@ -910,7 +935,10 @@ export async function handleCrmSyncJob(
       writeCompanyId = myCompanyId
       if (myCompanyId) note = unmatchedClientNote(item)
     }
-    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note, job.providerId)
+    // Ответственный — той компании, в которую ПИШЕМ: клиента, а при фолбэке — моей (PROCESSING.md §2,
+    // Этап C.2: «ответственным остаётся ответственный за мою компанию»).
+    const responsibleId = writeCompanyId ? await resolveResponsible(writeCompanyId) : null
+    const activityId = await deps.writeActivity(item, writeCompanyId, job.memberId, note, job.providerId, responsibleId ?? undefined)
     // Per-op observation (see `onOperation`): emitted for EVERY op that got this far, including
     // the ones that matched nothing — those are exactly the ones no other callback reports.
     const opOutcome = {

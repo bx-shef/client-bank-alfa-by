@@ -144,6 +144,35 @@ describe('#722 выбор носителя дела', () => {
     expect(seen).toContain('crm.activity.delete')
   })
 
+  it('ответственный компании идёт в RESPONSIBLE_ID, и владельца токена не спрашиваем (2026-09-29)', async () => {
+    const seen: string[] = []
+    const sent: Record<string, unknown>[] = []
+    const base = legacyPortalCall(seen)
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.activity.add') sent.push((params as { fields: Record<string, unknown> }).fields)
+      return base(method, params)
+    })
+    // Первый вызов узнаёт, что метода нет, второй идёт сразу по запасному пути из кэша портала —
+    // ответственный обязан доехать по ОБОИМ.
+    await writeTodoActivityViaRest(ITEM, '42', call, undefined, 'M1', noSleep, undefined, 17)
+    await writeTodoActivityViaRest({ ...ITEM, docId: 'D-78' }, '42', call, undefined, 'M1', noSleep, undefined, 17)
+    expect(sent.map(f => f.RESPONSIBLE_ID)).toEqual([17, 17])
+    expect(seen).not.toContain('profile')
+  })
+
+  it('у компании нет ответственного ⇒ запасной — владелец токена', async () => {
+    const seen: string[] = []
+    const sent: Record<string, unknown>[] = []
+    const base = legacyPortalCall(seen)
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.activity.add') sent.push((params as { fields: Record<string, unknown> }).fields)
+      return base(method, params)
+    })
+    await writeTodoActivityViaRest(ITEM, '42', call, undefined, 'M1', noSleep)
+    expect(sent[0]!.RESPONSIBLE_ID).toBe(5)
+    expect(seen).toContain('profile')
+  })
+
   it('портал без ответственного — честный отказ, а не выдуманный id', async () => {
     const call = vi.fn(async (method: string): Promise<Record<string, unknown>> => {
       if (method === 'crm.activity.todo.add') {
