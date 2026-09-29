@@ -71,8 +71,14 @@ redirect_uri() {
 }
 
 # The application name. It must be UNIQUE at the bank (a duplicate is 409), and ours is taken.
+# ⚠ Latin only (owner's rule, 2026-09-29): the bank accepts Cyrillic, but the name is a technical
+# identifier in the cabinet list; the human-readable text goes into the app DESCRIPTION in the cabinet.
 default_app_name() {
-  printf 'Импорт выписки в Bitrix24 (%s)' "$1"
+  printf 'bank-import-%s' "${1//./-}"
+}
+
+valid_app_name() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]{3,100}$ ]]
 }
 
 # One field of the node output: result_field "<output>" CLIENT_ID → value (base64-decoded).
@@ -95,15 +101,26 @@ rewrite_env() {
     function owned(line) {
       return line ~ /^[[:space:]]*(export[[:space:]]+)?PRIOR_OAUTH_(CLIENT_ID|CLIENT_SECRET|AUTH_METHOD|REDIRECT_URI|AUDIENCE|KID|PRIVATE_KEY|API_BASE|TOKEN_URL|AUTHORIZE_BASE)[[:space:]]*=/
     }
+    closer != "" {
+      # Inside a quoted multi-line value: skip up to and including the line with the closing quote.
+      # The quote may sit on its own line after the END marker — a hand edit leaves exactly that.
+      if (index($0, closer)) closer = ""
+      next
+    }
     skipping {
-      # Inside a multi-line key left from a hand edit: skip up to and including the END line.
+      # Inside an unquoted multi-line key: skip up to and including the END line.
       if ($0 ~ /-----END/) { skipping = 0; next }
       if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) skipping = 0
       else next
     }
     owned($0) {
-      # A multi-line key: the value opens and neither the END marker nor `\n` escapes are on this line.
-      if ($0 ~ /PRIVATE_KEY/ && $0 ~ /-----BEGIN/ && $0 !~ /-----END/ && $0 !~ /\\n/) skipping = 1
+      v = substr($0, index($0, "=") + 1)
+      sub(/^[[:space:]]+/, "", v)
+      q = substr(v, 1, 1)
+      if (q == "\"" || q == "\047") {
+        # A quoted value that does not close on this line continues on the following lines.
+        if (!index(substr(v, 2), q)) closer = q
+      } else if ($0 ~ /PRIVATE_KEY/ && $0 ~ /-----BEGIN/ && $0 !~ /-----END/ && $0 !~ /\\n/) skipping = 1
       next
     }
     { print }
@@ -301,10 +318,11 @@ REDIRECT="$(redirect_uri "$DOMAIN")"
 echo "Адрес возврата: $REDIRECT"
 
 NAME_DEFAULT="$(default_app_name "$DOMAIN")"
-printf 'Имя приложения в банке [%s]: ' "$NAME_DEFAULT"
+printf 'Имя приложения в банке, латиницей [%s]: ' "$NAME_DEFAULT"
 IFS= read -r APP_NAME
 APP_NAME="$(trim "$APP_NAME")"
 [ -n "$APP_NAME" ] || APP_NAME="$NAME_DEFAULT"
+valid_app_name "$APP_NAME" || { echo "✗ имя приложения — только латиница, цифры, «.», «_», «-» (3–100 знаков); русский текст — в описание в кабинете"; exit 2; }
 
 echo
 echo "Ключи ТЕХНОЛОГИЧЕСКОГО приложения из Магазина API — промышленные, не песочницы."

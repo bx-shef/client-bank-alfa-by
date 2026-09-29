@@ -44,6 +44,13 @@ describe('чистые функции', () => {
       expect(fnStatus('valid_cred', [bad]), JSON.stringify(bad)).not.toBe(0)
   })
 
+  it('имя приложения в банке — только латиница (решение владельца 2026-09-29)', () => {
+    expect(callFn('default_app_name', ['bank-app.standartno.by'])).toBe('bank-import-bank-app-standartno-by')
+    expect(fnStatus('valid_app_name', [callFn('default_app_name', ['bank-app.standartno.by'])])).toBe(0)
+    for (const bad of ['', 'ab', 'Импорт выписки', 'a b', 'a(b)', 'a\nb'])
+      expect(fnStatus('valid_app_name', [bad]), JSON.stringify(bad)).not.toBe(0)
+  })
+
   it('адрес возврата — в зарегистрированной форме, со слешем на конце', () => {
     expect(callFn('redirect_uri', ['bank-app.standartno.by'])).toBe('https://bank-app.standartno.by/oauth-priorbank-by/')
   })
@@ -81,6 +88,31 @@ describe('чистые функции', () => {
         `source <(sed -n '/^rewrite_env()/,/^}/p' "$1"); ENV_TMP=; rewrite_env "$2" "$3"`,
         '_', SCRIPT_PATH, f, 'X=1'])
       expect(readFileSync(f, 'utf8')).toBe('NEXT=1\nX=1\n')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // Живой прогон 2026-09-29: закрывающая кавычка ключа стояла ОТДЕЛЬНОЙ строкой после END, прежний
+  // разбор снимал ключ до END и оставлял строку `"`, и docker compose отказывался читать `.env`.
+  it('.env: закрывающая кавычка ключа отдельной строкой снимается вместе с ключом', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prior-env-'))
+    try {
+      const f = join(dir, '.env')
+      writeFileSync(f, [
+        'A=1',
+        'PRIOR_OAUTH_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----',
+        'AAAA',
+        '-----END PRIVATE KEY-----',
+        '"',
+        "PRIOR_OAUTH_CLIENT_SECRET='s",
+        "t'",
+        'PRIOR_OAUTH_AUDIENCE="-----BEGIN x\\n',
+        '"',
+        'B=2'
+      ].join('\n') + '\n')
+      execFileSync('bash', ['-c',
+        `source <(sed -n '/^rewrite_env()/,/^}/p' "$1"); ENV_TMP=; rewrite_env "$2" "$3"`,
+        '_', SCRIPT_PATH, f, 'X=1'])
+      expect(readFileSync(f, 'utf8')).toBe('A=1\nB=2\nX=1\n')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
@@ -233,7 +265,7 @@ describe('сквозной прогон', () => {
     const sent = JSON.parse(r.register)
     const jwks = JSON.parse(sent.jwks)
     expect(sent).toEqual(buildRegistrationMetadata({
-      clientName: 'Импорт выписки в Bitrix24 (bank-app.example.by)',
+      clientName: 'bank-import-bank-app-example-by',
       redirectUri: 'https://bank-app.example.by/oauth-priorbank-by/',
       jwks,
       tokenEndpointAuthMethod: 'private_key_jwt'
