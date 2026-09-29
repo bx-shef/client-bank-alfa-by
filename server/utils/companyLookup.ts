@@ -17,6 +17,12 @@
 // `isMyCompany='Y'` (confirmed live), not a separate entity. `readCompanyResponsible` then reads
 // the responsible of whichever company the activity goes to — the activity is put on that person.
 
+import { portalUserId } from '../../app/utils/activity'
+import { portalErrorCode } from './portalError'
+import { useServerLogger } from './serverLogger'
+
+const log = useServerLogger('activity')
+
 /** CRM entity type id for a Company (Lead=1, Deal=2, Contact=3, Company=4). */
 export const CRM_ENTITY_TYPE_COMPANY = 4
 
@@ -207,32 +213,47 @@ export async function findMyCompanyByAccount(account: string, call: RestCall): P
 }
 
 /**
- * The company's responsible user (`assignedById`) — the activity for an operation is put on that
- * person (owner's decision 2026-09-29: «если за компанию отвечает Вася — то и дело на Васе»). The
- * same rule already stood in docs/PROCESSING.md §2 («ответственным записи остаётся ответственный за
- * клиента/мою компанию»); the builder had the field, nothing filled it, so every activity landed on
- * the token owner — the person who installed the app.
+ * Portal answers that REFUSE this read for good. Not a reason to hold the payment back: the activity
+ * is still written — without a responsible, exactly as before the owner's decision below.
  *
- * `crm.item.get` rather than a filtered `crm.item.list`: it reads BY ID, so there is no filter to
- * be silently ignored (the failure `matchingEntityIds` exists for — an ignored filter returns the
- * portal's FIRST company, and its responsible would get someone else's payment).
+ * ⚠ Why not propagate these like every other error: a throw here fails the whole crm-sync job, and
+ * a PERMANENT refusal would fail it on every retry — every later operation of the batch, other
+ * clients included, would never be written (found in review of #780). `ERROR_METHOD_NOT_FOUND` is
+ * the realistic one — an old box without the universal `crm.item.*` API, the same class of portal
+ * the #722 fallback carrier exists for. For `ACCESS_DENIED`/`NOT_FOUND` the activity write that
+ * follows most likely fails the same way; degrading here just does not make it worse.
+ * Everything else — network, limits, 5xx — still propagates: a clean retry beats an activity on
+ * the wrong person.
+ */
+const RESPONSIBLE_READ_REFUSALS = new Set(['ACCESS_DENIED', 'NOT_FOUND', 'ERROR_METHOD_NOT_FOUND'])
+
+/**
+ * The company's responsible user (`assignedById`) — the activity is put on that person (owner's
+ * decision 2026-09-29; the why and the price live in CLAUDE.md, «Универсальное дело»).
  *
- * Returns `null` when the company has no usable responsible (absent / non-positive): the caller
- * then sends no responsible at all, exactly as before this change. A transport error PROPAGATES:
- * the call runs BEFORE the activity is written, so a throw is a clean job retry, same as
- * `findCompanyByAccount`.
- *
- * ⚠ The non-positive guard is load-bearing: `crm.activity.todo.add` does NOT validate the
- * responsible, it stores whatever it is given (read in the box's controller code, crm 26.800.0; a
- * probe there stored 0). A bad value would therefore create an activity with nobody responsible
- * instead of failing. For the same reason a DEACTIVATED user is accepted too — the activity follows
- * the company, and moving a former employee's companies to someone else is the admin's job in CRM.
+ * `crm.item.get`: read by id — no filter, no row to verify. It THROWS on a missing or unreadable
+ * company; a definite refusal degrades to `null` (see `RESPONSIBLE_READ_REFUSALS`), anything else
+ * propagates and the job retries. `null` also means «no usable responsible» (`portalUserId`: the
+ * portal stores whatever it is given, so a bad value must stop here) — then no responsible is sent,
+ * exactly as before, and the log says so: the activity's marker makes the write final.
+ * A deactivated user is NOT filtered out — the activity follows the company.
  */
 export async function readCompanyResponsible(companyId: string, call: RestCall): Promise<number | null> {
   const id = Number(companyId)
   if (!Number.isInteger(id) || id <= 0) return null
-  const resp = await call('crm.item.get', { entityTypeId: CRM_ENTITY_TYPE_COMPANY, id })
+  let resp: Record<string, unknown>
+  try {
+    resp = await call('crm.item.get', { entityTypeId: CRM_ENTITY_TYPE_COMPANY, id })
+  } catch (e) {
+    const code = portalErrorCode(e).toUpperCase()
+    if (!RESPONSIBLE_READ_REFUSALS.has(code)) throw e
+    log.warning(`компания ${id}: портал не дал прочитать ответственного (${code}) — дело уйдёт без него`)
+    return null
+  }
   const item = (resp?.result as Record<string, unknown> | undefined)?.item as Record<string, unknown> | undefined
-  const responsible = Number(item?.assignedById)
-  return Number.isInteger(responsible) && responsible > 0 ? responsible : null
+  const responsible = portalUserId(item?.assignedById)
+  // ⚠ Not silent: an empty or off-contract answer is indistinguishable from «nobody is responsible»,
+  // and the activity written without one stays that way — its marker makes the write final.
+  if (responsible === null) log.warning(`компания ${id}: ответственный не прочитан из ответа портала — дело уйдёт без него`)
+  return responsible
 }

@@ -160,6 +160,18 @@ describe('#722 выбор носителя дела', () => {
     expect(seen).not.toContain('profile')
   })
 
+  it('непригодный ответственный ⇒ тоже владелец токена, а не «ни на кого»', async () => {
+    const seen: string[] = []
+    const sent: Record<string, unknown>[] = []
+    const base = legacyPortalCall(seen)
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'crm.activity.add') sent.push((params as { fields: Record<string, unknown> }).fields)
+      return base(method, params)
+    })
+    await writeTodoActivityViaRest(ITEM, '42', call, undefined, 'M1', noSleep, undefined, -3)
+    expect(sent[0]!.RESPONSIBLE_ID).toBe(5)
+  })
+
   it('у компании нет ответственного ⇒ запасной — владелец токена', async () => {
     const seen: string[] = []
     const sent: Record<string, unknown>[] = []

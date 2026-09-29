@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PortalRestError } from '../server/utils/portalError'
 import {
   ACCOUNT_FIELDS,
   CRM_ENTITY_TYPE_COMPANY,
@@ -359,13 +360,17 @@ describe('readCompanyResponsible', () => {
     ['negative', { assignedById: -3 }],
     ['fractional', { assignedById: 1.5 }],
     ['not a number', { assignedById: 'boss' }],
-    ['null', { assignedById: null }]
+    ['null', { assignedById: null }],
+    // `Number()` would turn these into 1 and 17 — off-contract shapes must not become a person.
+    ['boolean', { assignedById: true }],
+    ['array', { assignedById: [17] }],
+    ['beyond a safe integer', { assignedById: 2 ** 53 + 2 }]
   ])('unusable responsible (%s) → null', async (_label, item) => {
     const { call } = fakeCall({ 'crm.item.get': () => ({ result: { item } }) })
     expect(await readCompanyResponsible('42', call)).toBeNull()
   })
 
-  it('an envelope without an item → null', async () => {
+  it('an envelope without an item → null (defensive: the real transport throws on NOT_FOUND instead)', async () => {
     const { call } = fakeCall({ 'crm.item.get': () => ({ error: 'NOT_FOUND' }) })
     expect(await readCompanyResponsible('42', call)).toBeNull()
   })
@@ -382,5 +387,25 @@ describe('readCompanyResponsible', () => {
       throw new Error('QUERY_LIMIT_EXCEEDED')
     }
     await expect(readCompanyResponsible('42', call)).rejects.toThrow('QUERY_LIMIT_EXCEEDED')
+  })
+
+  it('a transient portal CODE still propagates — only a definite refusal degrades', async () => {
+    const call: RestCall = async () => {
+      throw new PortalRestError('Too many requests', 'QUERY_LIMIT_EXCEEDED', 'crm.item.get')
+    }
+    await expect(readCompanyResponsible('42', call)).rejects.toThrow('Too many requests')
+  })
+
+  // ⚠ Found in review of #780: a PERMANENT refusal thrown here would fail the job on every retry,
+  // and every later operation of the batch — other clients included — would never be written.
+  it.each([
+    ['ACCESS_DENIED', new PortalRestError('Access denied', 'ACCESS_DENIED', 'crm.item.get')],
+    ['NOT_FOUND', new PortalRestError('Not found', 'NOT_FOUND', 'crm.item.get')],
+    ['ERROR_METHOD_NOT_FOUND inside the SDK wrapper', { code: 'JSSDK_UNKNOWN_ERROR', originalError: { code: 'ERROR_METHOD_NOT_FOUND' } }]
+  ])('a definite refusal (%s) → null: the activity is still written, without a responsible', async (_label, error) => {
+    const call: RestCall = async () => {
+      throw error
+    }
+    await expect(readCompanyResponsible('42', call)).resolves.toBeNull()
   })
 })

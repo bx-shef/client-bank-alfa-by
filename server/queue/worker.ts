@@ -246,8 +246,11 @@ export function liveHandlerDeps(): HandlerDeps {
       return writeTodoActivityViaRest(item, companyId, call, note, memberId, undefined, providerId, responsibleId)
     },
     // Ответственный за компанию — на него ставится дело (решение владельца 2026-09-29). Тот же
-    // мемоизированный на портал клиент, что у findCompany; нет токена портала → null.
-    findCompanyResponsible: async (companyId, memberId) => {
+    // мемоизированный на портал клиент, что у findCompany; демо и портал без токена → null.
+    // ⚠ Демо-гейт СВОЙ, хотя компании у демо-операции не бывает (findCompany/findMyCompany отдают
+    // null): гарантия «демо не трогает REST настоящего портала» держится у каждой зависимости сама.
+    findCompanyResponsible: async (item, companyId, memberId) => {
+      if (isDemoAccount(item.account)) return null
       const call = await resolvePortalCall(memberId)
       if (!call) return null
       return readCompanyResponsible(companyId, call)

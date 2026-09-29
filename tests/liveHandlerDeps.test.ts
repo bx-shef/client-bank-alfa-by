@@ -70,6 +70,11 @@ describe('liveHandlerDeps — DEMO-account gating (never touches a real portal)'
   it('writeActivity(demo) → null, no REST', async () => {
     expect(await deps.writeActivity(demoItem(), 'C-7', 'MEMBER-1')).toBeNull()
   })
+  it('findCompanyResponsible(demo) → null, no REST (свой гейт, а не надежда на findCompany)', async () => {
+    // ⚠ Без базы настоящий резолвер портала БРОСАЕТ (`DATABASE_URL is not set`), поэтому зелёный
+    // исход здесь доказывает, что демо отсекается ДО похода в портал.
+    expect(await deps.findCompanyResponsible(demoItem(), '7', 'MEMBER-1')).toBeNull()
+  })
   it('writeLedger(demo) → false, no REST (§9.3 #6 — durable record is the SP row)', async () => {
     expect(await deps.writeLedger!(demoItem(), decision.target, 'C-7', 'MEMBER-1', { paymentSp: { entityTypeId: 1044, id: 144 }, distributionSp: { entityTypeId: 1046, id: 146 } })).toBe(false)
   })

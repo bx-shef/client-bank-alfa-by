@@ -25,7 +25,7 @@ import type { PortalCurrencyFormats } from '~/utils/currencyFormat'
 import { dedupKey } from '~/utils/statement'
 import {
   ACTIVITY_ORIGIN, CRM_OWNER_TYPE_COMPANY, buildActivityTitle,
-  formatIsoDate, formatMoney, neutralizeBb, toPortalDeadline, type CrmCompanyRef
+  formatIsoDate, formatMoney, neutralizeBb, portalUserId, toPortalDeadline, type CrmCompanyRef
 } from '~/utils/activity'
 
 /** REST method that creates a universal timeline activity. */
@@ -171,6 +171,9 @@ export function buildTodoActivity(
    *  показывать сумму ОДИНАКОВО. Без него запасной вид «1 840,50 BYN». */
   currencies?: PortalCurrencyFormats
 ): TodoActivityParams {
+  // ⚠ Parsed, not truth-tested: the portal stores any responsible it is given, so `-3` or `1.5`
+  // would become an activity on nobody. Unusable ⇒ the parameter is not sent at all.
+  const responsible = portalUserId(company.assignedById)
   return {
     ownerTypeId: CRM_OWNER_TYPE_COMPANY,
     ownerId: company.id,
@@ -179,7 +182,7 @@ export function buildTodoActivity(
     // slim: реквизиты показывает таблица блоков (#729), в тексте — причина и назначение.
     description: buildActivityDescription(item, note, 'slim'),
     colorId: item.direction === 'credit' ? TODO_COLOR_CREDIT : TODO_COLOR_DEBIT,
-    ...(company.assignedById ? { responsibleId: company.assignedById } : {})
+    ...(responsible ? { responsibleId: responsible } : {})
   }
 }
 
