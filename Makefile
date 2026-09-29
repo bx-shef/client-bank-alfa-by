@@ -1,4 +1,4 @@
-.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats \
+.PHONY: dev build-local prod-up prod-down prod-pull prod-redeploy logs ps doctor queue-stats alert-test \
         prior-probe prior-switch poll-check payers self-update help \
         gw-stop gw-start compose-update alfa-page-probe alfa-currency-probe reap-status reap-off \
         bank-history refresh-now refresh-ladder refresh-ladder-log refresh-ladder-stop \
@@ -407,6 +407,15 @@ chat-log:
 	@t=$$(mktemp /tmp/chat-log.XXXXXX) && trap 'rm -f "$$t"' EXIT \
 	  && curl -fsSL -o "$$t" "$(RAW)/prod-chat-log.sh" \
 	  && bash "$$t" "$${SINCE:-}"
+
+## Проверить Telegram-оповещения: пробное сообщение тем же ботом в тот же чат (#426)
+#
+# Шлёт изнутри контейнера backend, его же переменными: так проверено, что backend принял
+# TELEGRAM_ALERT_BOT_TOKEN/TELEGRAM_ALERT_CHAT_ID и видит Telegram. Токен на экран не выводится.
+alert-test:
+	@t=$$(mktemp /tmp/alert-test.XXXXXX) && trap 'rm -f "$$t"' EXIT \
+	  && curl -fsSL -o "$$t" "$(RAW)/prod-alert-test.sh" \
+	  && bash "$$t" "$(DC)"
 
 ## Кого приложение не опознало и каким счётом это чинится (#501)
 #
