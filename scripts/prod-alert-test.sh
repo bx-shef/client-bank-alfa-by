@@ -42,6 +42,8 @@ JS='
 const [, api] = process.argv;
 const token = (process.env.TELEGRAM_ALERT_BOT_TOKEN || "").trim();
 const chat = (process.env.TELEGRAM_ALERT_CHAT_ID || "").trim();
+// Line breaks are flattened so a Telegram description cannot inject an ALERT_* line. A second
+// layer makes it untestable: DESC is printed after STATE/STATUS, and the shell reads the FIRST match.
 const say = (k, v) => console.log("ALERT_" + k + "=" + String(v).replace(/[\r\n]/g, " "));
 if (!token && !chat) { say("STATE", "off"); process.exit(0); }
 if (!token || !chat) { say("STATE", "half"); say("MISSING", token ? "chat" : "token"); process.exit(0); }
@@ -53,6 +55,7 @@ const clean = s => String(s || "").split(token).join("<token>").replace(/[^\x20-
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chat, text: "Проверка канала оповещений (make alert-test): если вы это читаете, оповещения о сбоях сюда дойдут.", disable_web_page_preview: true }),
+      redirect: "error",
       signal: AbortSignal.timeout(15000)
     });
   } catch (e) {
@@ -64,11 +67,16 @@ const clean = s => String(s || "").split(token).join("<token>").replace(/[^\x20-
   say("STATE", "http");
   say("STATUS", res.status);
   say("DESC", clean(j && j.description));
-})();
+})().finally(() => process.exit(0));
 '
 
 echo "== Оповещения оператору: пробное сообщение в Telegram =="
-OUT="$($DC exec -T backend node -e "$JS" "$API" 2>/dev/null)"
+# ⚠ A host-side timeout as well: the 15 s inside node do not cover a hung `docker compose exec`
+# (daemon stuck, container restarting). Its stderr is kept to explain an empty answer — it cannot
+# carry the token: the token is in no argument and node prints nothing about the request.
+ERR="$(mktemp /tmp/alert-test-err.XXXXXX)"
+trap 'rm -f "$ERR"' EXIT
+OUT="$(timeout 45 $DC exec -T backend node -e "$JS" "$API" 2>"$ERR")"
 field() { printf '%s\n' "$OUT" | sed -n "s/^ALERT_$1=//p" | head -1; }
 STATE="$(field STATE)"
 
@@ -86,7 +94,7 @@ case "$STATE" in
     echo "    Впишите её в .env и перезапустите стек: make prod-up"
     exit 1 ;;
   neterr)
-    echo "  ✗ Telegram недоступен из контейнера backend (сеть: $(field CODE))."
+    echo "  ✗ Telegram недоступен из контейнера backend (ошибка: $(field CODE))."
     echo "    Проверьте выход сервера в интернет до api.telegram.org."
     exit 1 ;;
   http)
@@ -106,5 +114,6 @@ case "$STATE" in
     exit 1 ;;
   *)
     echo "  ✗ не удалось выполнить проверку в контейнере backend — он запущен? (make ps)"
+    if [ -s "$ERR" ]; then echo "    ответ docker:"; tail -n 5 "$ERR" | sed 's/^/      /'; fi
     exit 1 ;;
 esac

@@ -29,6 +29,10 @@ http.createServer((req, res) => {
     if (chat === 'nochat') return send(400, { ok: false, description: 'Bad Request: chat not found' })
     // Эхо токена в описании — проверка, что скрипт вырезает его и из текста ответа.
     if (chat === 'echo') return send(401, { ok: false, description: 'Unauthorized for ' + req.url })
+    if (chat === 'limit') return send(429, { ok: false, description: 'Too Many Requests: retry after 5' })
+    if (chat === 'teapot') return send(418, {})
+    // Перевод строки в описании — попытка подделать поле вывода скрипта.
+    if (chat === 'forge') return send(400, { ok: false, description: 'x\nALERT_STATE=off\nALERT_STATUS=200' })
     send(500, {})
   })
 }).listen(0, '127.0.0.1', function () { process.stdout.write('PORT ' + this.address().port + '\n') })
@@ -38,6 +42,7 @@ http.createServer((req, res) => {
 // берутся из CT_* окружения теста (у настоящего контейнера — из docker-compose.prod.yml).
 const FAKE_DOCKER = String.raw`#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_ARGS"
+[ "${'$'}{FAKE_DOWN:-}" = 1 ] && { echo 'service "backend" is not running' >&2; exit 1; }
 case "$*" in
   *" backend node "*)
     while [ "$1" != node ]; do shift; done
@@ -71,7 +76,7 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-function run(ct: { token?: string, chat?: string }, api?: string): { code: number, out: string, args: string } {
+function run(ct: { token?: string, chat?: string, down?: boolean }, api?: string): { code: number, out: string, args: string } {
   const argsFile = join(dir, `args-${Math.random().toString(36).slice(2)}`)
   writeFileSync(argsFile, '')
   const r = spawnSync('bash', [SCRIPT, 'docker compose -f docker-compose.prod.yml'], {
@@ -81,7 +86,8 @@ function run(ct: { token?: string, chat?: string }, api?: string): { code: numbe
       FAKE_ARGS: argsFile,
       ALERT_TEST_API: api ?? `http://127.0.0.1:${port}`,
       CT_TOKEN: ct.token ?? '',
-      CT_CHAT: ct.chat ?? ''
+      CT_CHAT: ct.chat ?? '',
+      FAKE_DOWN: ct.down ? '1' : ''
     },
     encoding: 'utf8',
     timeout: 30_000
@@ -144,6 +150,74 @@ describe('make alert-test', () => {
     expect(r.args).toBe('')
     expect(readFileSync(join(dir, 'tg.log'), 'utf8')).toBe(before)
     expect(r.out).not.toContain(TOKEN)
+  })
+
+  it('401, 429 и прочий код — каждый своим текстом, код выхода 1, подсказка про make prod-up', () => {
+    const cases: Array<[string, string]> = [
+      ['echo', 'не принял токен бота (HTTP 401)'],
+      ['limit', 'ограничил частоту (HTTP 429)'],
+      ['teapot', 'Telegram ответил HTTP 418']
+    ]
+    for (const [chat, text] of cases) {
+      const r = run({ token: TOKEN, chat })
+      expect(r.code, chat).toBe(1)
+      expect(r.out, chat).toContain(text)
+      expect(r.out, chat).toContain('make prod-up и снова make alert-test')
+    }
+  })
+
+  it('пустое описание Telegram — строки «ответ Telegram:» нет', () => {
+    expect(run({ token: TOKEN, chat: 'teapot' }).out).not.toContain('ответ Telegram:')
+  })
+
+  it('перевод строки в описании не подделывает поле вывода', () => {
+    const r = run({ token: TOKEN, chat: 'forge' })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('отклонил запрос (HTTP 400)')
+    expect(r.out).not.toContain('канал выключен')
+    expect(r.out).not.toContain('✓')
+  })
+
+  it('пробелы вокруг значений (частая опечатка в .env) не мешают — как у самого приложения', () => {
+    const r = run({ token: ` ${TOKEN} `, chat: ' ok ' })
+    expect(r.code, r.out).toBe(0)
+    const last = readFileSync(join(dir, 'tg.log'), 'utf8').trim().split('\n').pop() ?? ''
+    expect(last.startsWith(`/bot${TOKEN}/sendMessage `)).toBe(true)
+  })
+
+  it('в Telegram уходит текст пробного сообщения, без превью ссылок', () => {
+    run({ token: TOKEN, chat: 'ok' })
+    const last = readFileSync(join(dir, 'tg.log'), 'utf8').trim().split('\n').pop() ?? ''
+    const body = JSON.parse(last.slice(last.indexOf(' ') + 1))
+    expect(body.text).toContain('Проверка канала оповещений')
+    expect(body.disable_web_page_preview).toBe(true)
+  })
+
+  it('выключен и половина пары — код 1 и подсказка про make prod-up', () => {
+    for (const ct of [{}, { token: TOKEN }, { chat: 'ok' }]) {
+      const r = run(ct)
+      expect(r.code, JSON.stringify(ct)).toBe(1)
+      expect(r.out).toContain('make prod-up')
+    }
+  })
+
+  it('сеть недоступна — показан код ошибки', () => {
+    expect(run({ token: TOKEN, chat: 'ok' }, 'http://127.0.0.1:1').out).toMatch(/ошибка: [A-Za-z_]+/)
+  })
+
+  it('адрес-подмена обязан быть ровно http://127.0.0.1:<порт> — с обоих концов', () => {
+    for (const api of [`http://evil.example/http://127.0.0.1:${port}`, `http://127.0.0.1:${port}/x`, `http://127.0.0.1:${port}@evil.example`]) {
+      const r = run({ token: TOKEN, chat: 'ok' }, api)
+      expect(r.code, api).toBe(2)
+      expect(r.args, api).toBe('')
+    }
+  })
+
+  it('контейнер недоступен — показывает ответ docker и подсказку make ps', () => {
+    const r = run({ token: TOKEN, chat: 'ok', down: true })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('(make ps)')
+    expect(r.out).toContain('service "backend" is not running')
   })
 
   it('контейнер не ответил — просит проверить, запущен ли он', () => {
