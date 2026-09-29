@@ -44,6 +44,13 @@ describe('чистые функции', () => {
       expect(fnStatus('valid_cred', [bad]), JSON.stringify(bad)).not.toBe(0)
   })
 
+  it('имя приложения в банке — только латиница (решение владельца 2026-09-29)', () => {
+    expect(callFn('default_app_name', ['bank-app.standartno.by'])).toBe('bank-import-bank-app-standartno-by')
+    expect(fnStatus('valid_app_name', [callFn('default_app_name', ['bank-app.standartno.by'])])).toBe(0)
+    for (const bad of ['', 'ab', 'Импорт выписки', 'a b', 'a(b)', 'a\nb'])
+      expect(fnStatus('valid_app_name', [bad]), JSON.stringify(bad)).not.toBe(0)
+  })
+
   it('адрес возврата — в зарегистрированной форме, со слешем на конце', () => {
     expect(callFn('redirect_uri', ['bank-app.standartno.by'])).toBe('https://bank-app.standartno.by/oauth-priorbank-by/')
   })
@@ -82,6 +89,84 @@ describe('чистые функции', () => {
         '_', SCRIPT_PATH, f, 'X=1'])
       expect(readFileSync(f, 'utf8')).toBe('NEXT=1\nX=1\n')
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // Живой прогон 2026-09-29: закрывающая кавычка ключа стояла ОТДЕЛЬНОЙ строкой после END, прежний
+  // разбор снимал ключ до END и оставлял строку `"`, и docker compose отказывался читать `.env`.
+  it('.env: закрывающая кавычка ключа отдельной строкой снимается вместе с ключом', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prior-env-'))
+    try {
+      const f = join(dir, '.env')
+      writeFileSync(f, [
+        'A=1',
+        'PRIOR_OAUTH_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----',
+        'AAAA',
+        '-----END PRIVATE KEY-----',
+        '"',
+        'PRIOR_OAUTH_CLIENT_SECRET=\'s',
+        't\'',
+        'PRIOR_OAUTH_AUDIENCE="-----BEGIN x\\n',
+        '"',
+        'B=2'
+      ].join('\n') + '\n')
+      execFileSync('bash', ['-c',
+        `source <(sed -n '/^rewrite_env()/,/^}/p' "$1"); ENV_TMP=; rewrite_env "$2" "$3"`,
+        '_', SCRIPT_PATH, f, 'X=1'])
+      expect(readFileSync(f, 'utf8')).toBe('A=1\nB=2\nX=1\n')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('rewrite_env отказывает, а не теряет строки (панель ревью #778)', () => {
+  const run = (text: string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'prior-env-'))
+    try {
+      const f = join(dir, '.env')
+      writeFileSync(f, text)
+      const r = spawnSync('bash', ['-c',
+        `source <(sed -n '/^rewrite_env()/,/^}/p' "$1"); ENV_TMP=; rewrite_env "$2" "$3"`,
+        '_', SCRIPT_PATH, f, 'X=1'])
+      return { status: r.status, env: readFileSync(f, 'utf8'), files: readdirSync(dir) }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  it('незакрытая кавычка — отказ, .env нетронут (иначе съела бы остаток файла)', () => {
+    const text = 'A=1\nPRIOR_OAUTH_CLIENT_SECRET="abc\nB24_TOKEN_ENC_KEY=k\nDATABASE_URL=d\n'
+    const r = run(text)
+    expect(r.status).not.toBe(0)
+    expect(r.env).toBe(text)
+    expect(r.files).toEqual(['.env'])
+  })
+
+  it('кавычка закрылась ЧУЖОЙ строкой — отказ: иначе пропала бы чужая переменная', () => {
+    const text = 'A=1\nPRIOR_OAUTH_KID="k\nDATABASE_URL="d"\nB=2\n'
+    const r = run(text)
+    expect(r.status).not.toBe(0)
+    expect(r.env).toBe(text)
+  })
+
+  it('ключ без кавычек: строка base64 с «==» не выводит из пропуска', () => {
+    const r = run('A=1\nPRIOR_OAUTH_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nMIIE\nRGVm==\n-----END PRIVATE KEY-----\nB=2\n')
+    expect(r.status).toBe(0)
+    expect(r.env).toBe('A=1\nB=2\nX=1\n')
+  })
+
+  it('пустое значение ключа и PEM следующими строками — снимается целиком', () => {
+    const r = run('A=1\nPRIOR_OAUTH_PRIVATE_KEY=\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\nB=2\n')
+    expect(r.status).toBe(0)
+    expect(r.env).toBe('A=1\nB=2\nX=1\n')
+  })
+
+  it('ключ без строки END — отказ', () => {
+    const text = 'A=1\nPRIOR_OAUTH_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nMIIE\nB=2\n'
+    const r = run(text)
+    expect(r.status).not.toBe(0)
+    expect(r.env).toBe(text)
+  })
+
+  it('остаток ключа вне нашего блока — отказ, а не запись .env, который compose не прочтёт', () => {
+    const text = 'A=1\n-----BEGIN PRIVATE KEY-----\nB=2\n'
+    expect(run(text).status).not.toBe(0)
   })
 })
 
@@ -164,7 +249,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
 const TECH_SECRET = 'TechSecretQwerty789'
 const ENV_BEFORE = 'DOMAIN=bank-app.example.by\nPRIOR_OAUTH_CLIENT_ID=OURS\nPRIOR_OAUTH_KID=prior-key-1\nALFA_OAUTH_CLIENT_ID=alfa\n'
 
-async function e2e(opts: { mode?: string, connected?: string, confirm?: string, envBefore?: string, techId?: string, domain?: string } = {}) {
+async function e2e(opts: { mode?: string, connected?: string, confirm?: string, envBefore?: string, techId?: string, domain?: string, name?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'prior-reg-'))
   const bin = join(dir, 'bin'), log = join(dir, 'log'), stack = join(dir, 'stack')
   for (const d of [bin, log, stack]) mkdirSync(d)
@@ -185,7 +270,7 @@ async function e2e(opts: { mode?: string, connected?: string, confirm?: string, 
         ? [['«да»', opts.confirm ?? 'да']]
         : []),
       ...(opts.domain === undefined ? [] : [['Домен приложения', opts.domain]]),
-      ['Имя приложения', ''],
+      ['Имя приложения', opts.name ?? ''],
       ['client_id техприложения', opts.techId ?? 'TechID123'],
       ['не отображается', TECH_SECRET]
     ]
@@ -233,7 +318,7 @@ describe('сквозной прогон', () => {
     const sent = JSON.parse(r.register)
     const jwks = JSON.parse(sent.jwks)
     expect(sent).toEqual(buildRegistrationMetadata({
-      clientName: 'Импорт выписки в Bitrix24 (bank-app.example.by)',
+      clientName: 'bank-import-bank-app-example-by',
       redirectUri: 'https://bank-app.example.by/oauth-priorbank-by/',
       jwks,
       tokenEndpointAuthMethod: 'private_key_jwt'
@@ -365,6 +450,23 @@ describe('сквозной прогон: сверка и ввод', () => {
     expect(r.code).toBe(2)
     expect(r.requests).toBe('')
     expect(r.env).toBe('X=1\n')
+  }, 120_000)
+
+  it('имя приложения не латиницей — отказ до банка', async () => {
+    const r = await e2e({ name: 'Импорт выписки' })
+    expect(r.code).toBe(2)
+    expect(r.out).toContain('только латиница')
+    expect(r.requests).toBe('')
+    expect(r.env).toBe(ENV_BEFORE)
+  }, 120_000)
+
+  it('.env нельзя переписать безопасно — отказ до банка', async () => {
+    const env = 'DOMAIN=bank-app.example.by\nPRIOR_OAUTH_KID="k\nDATABASE_URL=d\n'
+    const r = await e2e({ envBefore: env })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('Банк не трогал')
+    expect(r.requests).toBe('')
+    expect(r.env).toBe(env)
   }, 120_000)
 
   it('негодный client_id техприложения — отказ до банка', async () => {

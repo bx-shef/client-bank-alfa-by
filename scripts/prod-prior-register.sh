@@ -71,8 +71,14 @@ redirect_uri() {
 }
 
 # The application name. It must be UNIQUE at the bank (a duplicate is 409), and ours is taken.
+# ⚠ Latin only (owner's rule, 2026-09-29): the bank accepts Cyrillic, but the name is a technical
+# identifier in the cabinet list; the human-readable text goes into the app DESCRIPTION in the cabinet.
 default_app_name() {
-  printf 'Импорт выписки в Bitrix24 (%s)' "$1"
+  printf 'bank-import-%s' "${1//./-}"
+}
+
+valid_app_name() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]{3,100}$ ]]
 }
 
 # One field of the node output: result_field "<output>" CLIENT_ID → value (base64-decoded).
@@ -87,6 +93,11 @@ result_field() {
 # ⚠ The owner is copied from the old file and the mode is 600: run as root, a bitrix-owned .env
 # would otherwise become root-only and the cron autodeploy would lose it.
 ENV_TMP=""
+# ⚠ It REFUSES (non-zero, .env untouched) rather than guesses: a quote that never closes, a key
+# without its END marker, a foreign variable gone from the result, a key remnant left in it. Losing
+# a line of .env silently (B24_TOKEN_ENC_KEY, DATABASE_URL…) breaks the server, and a leftover lone
+# quote makes docker compose refuse the whole file — both were real risks, the second a live run.
+# The script dry-runs this on a copy BEFORE the bank is contacted (see `preflight_env`).
 rewrite_env() {
   local f="$1" block="$2" tmp
   tmp="$(mktemp "${f}.XXXXXX")" || return 1
@@ -95,19 +106,49 @@ rewrite_env() {
     function owned(line) {
       return line ~ /^[[:space:]]*(export[[:space:]]+)?PRIOR_OAUTH_(CLIENT_ID|CLIENT_SECRET|AUTH_METHOD|REDIRECT_URI|AUDIENCE|KID|PRIVATE_KEY|API_BASE|TOKEN_URL|AUTHORIZE_BASE)[[:space:]]*=/
     }
+    closer != "" {
+      # Inside a quoted multi-line value: skip up to and including the line with the closing quote.
+      # The quote may sit on its own line after the END marker — a hand edit leaves exactly that.
+      if (index($0, closer)) closer = ""
+      next
+    }
     skipping {
-      # Inside a multi-line key left from a hand edit: skip up to and including the END line.
-      if ($0 ~ /-----END/) { skipping = 0; next }
-      if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) skipping = 0
-      else next
+      # Inside an unquoted multi-line key: skip up to and including the END line — and ONLY the END
+      # line ends it: the last base64 line of a PEM (`RGVm==`) looks like an assignment.
+      if ($0 ~ /-----END/) skipping = 0
+      next
+    }
+    pem_next {
+      # An empty key value with the PEM on the following lines.
+      pem_next = 0
+      if ($0 ~ /^[[:space:]]*-----BEGIN/) { if ($0 !~ /-----END/) skipping = 1; next }
     }
     owned($0) {
-      # A multi-line key: the value opens and neither the END marker nor `\n` escapes are on this line.
-      if ($0 ~ /PRIVATE_KEY/ && $0 ~ /-----BEGIN/ && $0 !~ /-----END/ && $0 !~ /\\n/) skipping = 1
+      v = substr($0, index($0, "=") + 1)
+      sub(/^[[:space:]]+/, "", v)
+      sub(/[[:space:]\r]+$/, "", v)
+      q = substr(v, 1, 1)
+      if (q == "\"" || q == "\047") {
+        # A quoted value that does not close on this line continues on the following lines.
+        if (!index(substr(v, 2), q)) closer = q
+      } else if ($0 ~ /PRIVATE_KEY/ && v == "") pem_next = 1
+      else if ($0 ~ /PRIVATE_KEY/ && $0 ~ /-----BEGIN/ && $0 !~ /-----END/ && $0 !~ /\\n/) skipping = 1
       next
     }
     { print }
+    END { if (closer != "" || skipping) exit 3 }
   ' "$f" > "$tmp"; then
+    rm -f "$tmp"; ENV_TMP=""; return 1
+  fi
+  # Every foreign variable must survive (names read outside PEM bodies), and no key remnant may stay.
+  local names='
+    /-----BEGIN/ { pem = 1 } pem { if (/-----END/) pem = 0; next }
+    match($0, /^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) {
+      n = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*(export[[:space:]]+)?/, "", n); sub(/[[:space:]]*=$/, "", n)
+      if (n !~ /^PRIOR_OAUTH_(CLIENT_ID|CLIENT_SECRET|AUTH_METHOD|REDIRECT_URI|AUDIENCE|KID|PRIVATE_KEY|API_BASE|TOKEN_URL|AUTHORIZE_BASE)$/) print n
+    }'
+  if [ -n "$(comm -23 <(awk "$names" "$f" | sort -u) <(awk "$names" "$tmp" | sort -u))" ] \
+    || grep -qE -- '-----(BEGIN|END)|^[[:space:]]*["'"'"'][[:space:]]*$' "$tmp"; then
     rm -f "$tmp"; ENV_TMP=""; return 1
   fi
   if [ -s "$tmp" ] && [ -n "$(tail -c1 "$tmp")" ]; then printf '\n' >> "$tmp"; fi
@@ -118,6 +159,17 @@ rewrite_env() {
     rm -f "$tmp"; ENV_TMP=""; return 1
   fi
   ENV_TMP=""
+}
+
+# Dry run of rewrite_env on a copy — BEFORE the bank: after a registration a refusal would leave
+# the only copy of the new key nowhere.
+preflight_env() {
+  local d rc
+  d="$(mktemp -d)" || return 1
+  cp -p "$1" "$d/.env" && rewrite_env "$d/.env" "X=1"
+  rc=$?
+  rm -rf "$d"
+  return "$rc"
 }
 
 # The block written into .env. The key is ONE line with `\n` escapes inside double quotes — the form
@@ -248,6 +300,7 @@ verify() {
   echo
   echo "Дальше, в кабинете Магазина API банка: оформить этому приложению ПЯТЬ подписок —"
   echo "  Open-banking-authorize, Open-banking-DCR, Open-banking, Open-banking-info, Authorize."
+  echo "И описание приложения (карандаш в его строке): «Импорт выписки в Bitrix24 (<домен приложения>)»."
   echo "Потом проверка токеном: make prior-probe"
 }
 
@@ -262,6 +315,12 @@ DC="${1:-docker compose -f docker-compose.prod.yml}"
 
 [ -f ./.env ] || { echo "✗ ./.env не найден — запускайте из каталога со стеком"; exit 1; }
 [ -t 0 ] || { echo "✗ ключи техприложения вводятся с клавиатуры — запустите команду в терминале"; exit 2; }
+preflight_env ./.env || {
+  echo "✗ не могу безопасно заменить блок PRIOR_OAUTH_* в .env: незакрытая кавычка, ключ без строки END"
+  echo "  или строка, которую нельзя отнести ни к одной переменной. Банк не трогал, .env не менял —"
+  echo "  поправьте блок PRIOR_OAUTH_* в .env и запустите команду снова."
+  exit 1
+}
 
 env_value() {
   sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=//p" ./.env | head -1 \
@@ -301,10 +360,11 @@ REDIRECT="$(redirect_uri "$DOMAIN")"
 echo "Адрес возврата: $REDIRECT"
 
 NAME_DEFAULT="$(default_app_name "$DOMAIN")"
-printf 'Имя приложения в банке [%s]: ' "$NAME_DEFAULT"
+printf 'Имя приложения в банке, латиницей [%s]: ' "$NAME_DEFAULT"
 IFS= read -r APP_NAME
 APP_NAME="$(trim "$APP_NAME")"
 [ -n "$APP_NAME" ] || APP_NAME="$NAME_DEFAULT"
+valid_app_name "$APP_NAME" || { echo "✗ имя «$APP_NAME» не годится: только латиница, цифры, «.», «_», «-» (3–100 знаков); русский текст — в описание в кабинете"; exit 2; }
 
 echo
 echo "Ключи ТЕХНОЛОГИЧЕСКОГО приложения из Магазина API — промышленные, не песочницы."
