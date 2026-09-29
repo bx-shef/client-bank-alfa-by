@@ -292,7 +292,7 @@ async function dcrRegister(tokenA, jwks, pem) {
   // with --register-jwt, as a signed JWT (application/jwt) — the OB DCR profile
   // often requires a signed request; a JSON body then triggers a generic 500.
   const meta = buildRegistrationMetadata({
-    clientName: args['app-name'] ? String(args['app-name']) : 'Импорт выписки в Bitrix24 (bx-shef)',
+    clientName: args['app-name'] ? String(args['app-name']) : 'bx-shef-bank-import-sandbox',
     redirectUri: cfg.redirectUri,
     jwks,
     // Registered method MUST match what every token call sends (#444) — one method per app.
