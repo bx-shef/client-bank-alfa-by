@@ -51,9 +51,10 @@ export type B24EventAction
   = | { type: 'register', memberId: string, credentials: PortalCredentials }
     | { type: 'unregister', memberId: string }
     | { type: 'reconcile-deletion', memberId: string, deletion: DeletionEntityFields }
-    /** ONAPPUSERREADY: record the app's system user. `appTokenHash` ⇒ not verified yet (the install
-     *  was not persisted when the event arrived) — the consumer verifies it against the stored token. */
-    | { type: 'system-user', memberId: string, userId: number, appTokenHash?: string }
+    /** ONAPPUSERREADY: record the app's system user. The consumer ALWAYS re-verifies `appTokenHash`
+     *  against the token stored at write time; `verified` only says whether the route could check it
+     *  already (install persisted) — which decides the cap and the Redis-down fallback. */
+    | { type: 'system-user', memberId: string, userId: number, appTokenHash: string, verified: boolean }
 
 /** What the route should return: an HTTP status, a small JSON body, and (on accept)
  *  the action to enqueue. No `action` ⇒ nothing to persist (denied / ignored). */
@@ -158,6 +159,10 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     } catch {
       return { status: 400, body: { error: `malformed ${B24_SYSTEM_USER_EVENT}` } }
     }
+    // What travels to the queue is a HASH of the token, never the token itself; the consumer
+    // re-verifies it against the token stored at WRITE time (an uninstall + instant reinstall may land
+    // in between — trust the row as it is then, not as it was on arrival).
+    const appTokenHash = applicationTokenHash(claim.applicationToken)
     const storedToken = await deps.loadStoredToken(claim.memberId)
     if (storedToken) {
       const verdict = appTokenVerdict({ isInstall: false, incoming: claim.applicationToken, storedToken })
@@ -165,23 +170,17 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
       return {
         status: 200,
         body: { ok: true, event: B24_SYSTEM_USER_EVENT, memberId: claim.memberId },
-        action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId }
+        action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId, appTokenHash, verified: true }
       }
     }
     // ⚠ No stored token is NOT a denial here, unlike uninstall. The portal sends this event together
     // with ONAPPINSTALL, and the install is persisted only after a network round-trip to Bitrix's
     // OAuth server (#162) — so this event routinely arrives first. Online events are not resent;
-    // refusing would lose the system user for good. The consumer verifies later, against the token
-    // the install stores; what travels is a HASH of the token, never the token itself.
+    // refusing would lose the system user for good. The consumer waits for the install and verifies.
     return {
       status: 200,
       body: { ok: true, event: B24_SYSTEM_USER_EVENT, memberId: claim.memberId, deferred: true },
-      action: {
-        type: 'system-user',
-        memberId: claim.memberId,
-        userId: claim.userId,
-        appTokenHash: applicationTokenHash(claim.applicationToken)
-      }
+      action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId, appTokenHash, verified: false }
     }
   }
 
@@ -308,12 +307,12 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
     return { ...result, outcome: enq ? 'queued' : 'none' }
   }
 
-  // ONAPPUSERREADY: enqueue the claim; the consumer (single writer) records it, verifying first when
-  // the route could not. Queue unavailable: a verified claim is written right here (UPDATE-only —
-  // nothing to resurrect), an unverified one cannot be checked later by anybody and is dropped. The
-  // loss is soft by design: elements stay on the installer, as on a portal that never sent the event.
+  // ONAPPUSERREADY: enqueue the claim; the consumer (single writer) verifies and records it. Queue
+  // unavailable: a claim the route verified is written right here (UPDATE-only — nothing to
+  // resurrect), an unverified one cannot be checked later by anybody and is dropped. The loss is soft
+  // by design: elements stay on the installer, as on a portal that never sent the event.
   if (action.type === 'system-user') {
-    if (action.appTokenHash !== undefined) {
+    if (!action.verified) {
       // UNverified claim — capped, or a flood of forgeries with made-up portals would become a flood
       // of jobs in the very queue that carries installs. Refused ⇒ lost softly (installer stays).
       let admitted = false
@@ -331,10 +330,7 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
       domain,
       kind: 'ONAPPUSERREADY',
       ts,
-      systemUser: {
-        userId: action.userId,
-        ...(action.appTokenHash !== undefined ? { appTokenHash: action.appTokenHash } : {})
-      }
+      systemUser: { userId: action.userId, appTokenHash: action.appTokenHash }
     }
     let enq = false
     try {
@@ -343,7 +339,7 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
       // Redis threw — same as a disabled queue.
     }
     if (enq) return { ...result, outcome: 'queued' }
-    if (action.appTokenHash !== undefined) {
+    if (!action.verified) {
       return { status: 503, body: { error: 'system user: install not persisted yet and queue unavailable' }, outcome: 'none' }
     }
     await deps.saveSystemUser(action.memberId, action.userId)

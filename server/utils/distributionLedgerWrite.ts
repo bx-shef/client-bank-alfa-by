@@ -59,6 +59,14 @@ function nextOffset(resp: Record<string, unknown>): number | null {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
+/**
+ * Who becomes the responsible of an element this module CREATES — asked lazily, only on the create
+ * branch, so a found element never pays for it (and a failing lookup never breaks writing columns to
+ * an existing one). The worker supplies it (`withElementResponsible`): the app's system user, else
+ * the installer (owner's decision 2026-09-29).
+ */
+export type ResponsibleResolver = () => Promise<number>
+
 /** Find an existing distribution row id by its dedup marker, or `null`. Empty marker → `null`
  *  without a REST call (an empty filter would list every row). */
 export async function findDistributionByMarker(distributionSp: SpRef, marker: string, call: RestCall): Promise<string | null> {
@@ -72,10 +80,14 @@ export async function findDistributionByMarker(distributionSp: SpRef, marker: st
 
 /** Write one distribution row idempotently: if a row with the same marker already exists, return it
  *  (`created:false`) without adding a duplicate; else `crm.item.add` and return the new id. */
-export async function writeDistributionRow(input: DistributionRowInput, call: RestCall): Promise<{ id: string, created: boolean }> {
+export async function writeDistributionRow(
+  input: DistributionRowInput,
+  call: RestCall,
+  responsible?: ResponsibleResolver
+): Promise<{ id: string, created: boolean }> {
   const existing = await findDistributionByMarker(input.distributionSp, input.marker, call)
   if (existing) return { id: existing, created: false }
-  const addCall = buildDistributionRowAddCall(input)
+  const addCall = buildDistributionRowAddCall(responsible ? { ...input, assignedById: await responsible() } : input)
   const resp = await call(addCall.method, addCall.params)
   const id = extractAddedItemId(resp)
   if (!id) throw new Error('crm.item.add returned no distribution row id')
@@ -95,10 +107,15 @@ export async function findPaymentByMarker(paymentSp: SpRef, marker: string, call
 /** Ensure the payment carrier element for an operation exists: return it if a row with the same
  *  operation marker is already present (`created:false`), else `crm.item.add` and return the new id.
  *  Idempotent write-once per operation (mirrors the activity marker, #259). */
-export async function ensurePaymentElement(paymentSp: SpRef, input: PaymentElementInput, call: RestCall): Promise<{ id: string, created: boolean }> {
+export async function ensurePaymentElement(
+  paymentSp: SpRef,
+  input: PaymentElementInput,
+  call: RestCall,
+  responsible?: ResponsibleResolver
+): Promise<{ id: string, created: boolean }> {
   const existing = await findPaymentByMarker(paymentSp, input.marker, call)
   if (existing) return { id: existing, created: false }
-  const addCall = buildPaymentElementAddCall(paymentSp, input)
+  const addCall = buildPaymentElementAddCall(paymentSp, responsible ? { ...input, assignedById: await responsible() } : input)
   const resp = await call(addCall.method, addCall.params)
   const id = extractAddedItemId(resp)
   if (!id) throw new Error('crm.item.add returned no payment element id')
@@ -259,17 +276,15 @@ export async function writeLedgerAllocation(
   target: AllocationCandidate,
   companyId: string | undefined,
   call: RestCall,
-  /** Responsible of the elements this call CREATES (the app's system user, else the installer —
-   *  owner's decision 2026-09-29). An element found by its marker keeps its own. */
-  assignedById?: number
+  /** Responsible of the elements this call CREATES (see `ResponsibleResolver`). */
+  responsible?: ResponsibleResolver
 ): Promise<LedgerAllocationResult> {
   const payment = await ensurePaymentElement(paymentSp, {
     opportunity: op.amount,
     currency: op.currency,
     marker: dedupKey(op),
-    companyId,
-    ...(assignedById !== undefined ? { assignedById } : {})
-  }, call)
+    companyId
+  }, call, responsible)
 
   const row = await writeDistributionRow({
     paymentSp,
@@ -280,9 +295,8 @@ export async function writeLedgerAllocation(
     targetKind: target.kind,
     targetId: target.id,
     source: 'auto',
-    marker: allocationFactKey(op, target),
-    ...(assignedById !== undefined ? { assignedById } : {})
-  }, call)
+    marker: allocationFactKey(op, target)
+  }, call, responsible)
 
   const remaining = await recomputeNeedDistribution(paymentSp, payment.id, distributionSp, op.amount, op.currency, call)
 
@@ -310,16 +324,15 @@ export async function writeTriggerLedgerFact(
   target: AllocationCandidate,
   companyId: string | undefined,
   call: RestCall,
-  /** Responsible of the elements this call creates — see `writeLedgerAllocation`. */
-  assignedById?: number
+  /** Responsible of the elements this call CREATES (see `ResponsibleResolver`). */
+  responsible?: ResponsibleResolver
 ): Promise<{ created: boolean }> {
   const payment = await ensurePaymentElement(paymentSp, {
     opportunity: op.amount,
     currency: op.currency,
     marker: dedupKey(op),
-    companyId,
-    ...(assignedById !== undefined ? { assignedById } : {})
-  }, call)
+    companyId
+  }, call, responsible)
 
   const row = await writeDistributionRow({
     paymentSp,
@@ -330,9 +343,8 @@ export async function writeTriggerLedgerFact(
     targetKind: target.kind,
     targetId: target.id,
     source: 'auto',
-    marker: allocationFactKey(op, target),
-    ...(assignedById !== undefined ? { assignedById } : {})
-  }, call)
+    marker: allocationFactKey(op, target)
+  }, call, responsible)
 
   return { created: row.created }
 }

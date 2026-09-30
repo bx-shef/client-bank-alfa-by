@@ -4,6 +4,7 @@ import type { AllocationCandidate } from '../app/utils/allocation'
 import type { HandlerDeps } from '../server/queue/handlers'
 import type { RegistryWriteJobDeps } from '../server/utils/deferredWriteJobs'
 import { resetTokenOwnerCache } from '../server/utils/portalTokenOwner'
+import { applicationTokenHash, resetSystemUserRefusals } from '../server/utils/systemUser'
 
 // Ответственный элементов смарт-процессов в НАСТОЯЩЕМ воркере (решение владельца 2026-09-29):
 // служебный пользователь приложения, а где его нет — установивший. Писатели и выбор покрыты своими
@@ -13,17 +14,18 @@ import { resetTokenOwnerCache } from '../server/utils/portalTokenOwner'
 // от того, каким путём записались. Подменяются резолвер портала и хранилище (без базы), не писатели.
 
 const h = vi.hoisted(() => {
+  const flags = { foundExisting: false }
   const sent: Array<{ method: string, params: Record<string, unknown> }> = []
   const call = async (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
     sent.push({ method, params })
     if (method === 'profile') return { result: { ID: '3' } }
-    if (method === 'crm.item.list') return { result: { items: [] } }
+    if (method === 'crm.item.list') return { result: { items: flags.foundExisting ? [{ id: 42 }] : [] } }
     if (method === 'crm.item.add') return { result: { item: { id: 700 } } }
     return { result: { item: {} } }
   }
   const resolver = Object.assign(async () => call, { evict: () => {}, batch: async () => null })
   const store = { stored: '', written: [] as Array<[string, number]> }
-  return { sent, resolver, store }
+  return { sent, resolver, store, flags }
 })
 
 vi.mock('../server/utils/portalSdkResolver', async orig => ({
@@ -53,6 +55,7 @@ beforeEach(() => {
   h.sent.length = 0
   h.store.written.length = 0
   resetTokenOwnerCache()
+  resetSystemUserRefusals()
 })
 
 const ITEM: StatementItem = {
@@ -84,18 +87,34 @@ describe('ответственный новых элементов в liveHandle
 
   it('отложенная дозапись реестра спрашивает того же ответственного', async () => {
     const call = await h.resolver()
-    expect(await registry.elementResponsible('SYS', call)).toBe(512)
-    expect(await registry.elementResponsible('NOSYS', call)).toBe(3)
+    expect(await registry.withResponsible('SYS', call, r => r())).toBe(512)
+    expect(await registry.withResponsible('NOSYS', call, r => r())).toBe(3)
+  })
+
+  it('элемент уже есть — ответственного не спрашиваем вовсе (ни базы, ни profile)', async () => {
+    h.flags.foundExisting = true
+    try {
+      await deps.writePaymentRegistry!(ITEM, null, 'NOSYS', 'alfa-by', SPS.paymentSp)
+    } finally {
+      h.flags.foundExisting = false
+    }
+    expect(h.sent.some(s => s.method === 'profile')).toBe(false)
+    expect(h.sent.some(s => s.method === 'crm.item.add')).toBe(false)
   })
 })
 
 describe('запись служебного пользователя в liveHandlerDeps', () => {
-  it('сверенная роутом заявка пишется в базу', async () => {
-    expect(await deps.saveSystemUser({ memberId: 'M', userId: 512 }, { finalAttempt: false })).toBe('saved')
+  it('заявка сверяется с токеном из базы и пишется', async () => {
+    h.store.stored = 'app-token'
+    try {
+      expect(await deps.saveSystemUser({ memberId: 'M', userId: 512, appTokenHash: applicationTokenHash('app-token') }, { finalAttempt: false })).toBe('saved')
+    } finally {
+      h.store.stored = ''
+    }
     expect(h.store.written).toEqual([['M', 512]])
   })
 
-  it('отложенная: установки ещё нет — повтор, а на последней попытке тихий отказ; в базу ничего', async () => {
+  it('установки ещё нет — повтор, а на последней попытке тихий отказ; в базу ничего', async () => {
     h.store.stored = ''
     const claim = { memberId: 'M', userId: 512, appTokenHash: 'deadbeef' }
     await expect(deps.saveSystemUser(claim, { finalAttempt: false })).rejects.toThrow(/ещё не записана/)

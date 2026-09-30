@@ -34,7 +34,7 @@ function registryDeps(over: Partial<RegistryWriteJobDeps> = {}): RegistryWriteJo
   return {
     resolvePortalCall: async () => ({} as never),
     writePaymentRegistry: async () => '101',
-    elementResponsible: async () => 512,
+    withResponsible: async (_memberId, _call, write) => write(async () => 512),
     findActivityId: async () => null,
     bindActivity: async () => ({ bound: 0, failed: 0 }),
     ...over
@@ -49,7 +49,7 @@ describe('дозапись элемента реестра (#578)', () => {
     const call = { tag: 'rest' } as never
     const writePaymentRegistry = vi.fn(async () => '101')
     await handleRegistryWriteJob(REGISTRY_JOB, registryDeps({ resolvePortalCall: async () => call, writePaymentRegistry }))
-    expect(writePaymentRegistry).toHaveBeenCalledWith(ITEM, '7', 'alfa-by', REGISTRY_JOB.paymentSp, call, 512)
+    expect(writePaymentRegistry).toHaveBeenCalledWith(ITEM, '7', 'alfa-by', REGISTRY_JOB.paymentSp, call, expect.any(Function))
   })
 
   it('ответственный — тот же, что у синхронного пути: спрашивается по порталу задачи и её токену', async () => {
@@ -57,22 +57,25 @@ describe('дозапись элемента реестра (#578)', () => {
     // ответственный ставится только при создании, и разойдись пути — элементы одного портала лежали
     // бы на разных людях в зависимости от того, с какой попытки записались.
     const call = { tag: 'rest' } as never
-    const elementResponsible = vi.fn(async () => 77)
+    const seen: unknown[] = []
+    const withResponsible: RegistryWriteJobDeps['withResponsible'] = async (memberId, c, write) => {
+      seen.push([memberId, c])
+      return write(async () => 77)
+    }
     const writePaymentRegistry = vi.fn<RegistryWriteJobDeps['writePaymentRegistry']>(async () => '101')
-    await handleRegistryWriteJob(REGISTRY_JOB, registryDeps({ resolvePortalCall: async () => call, elementResponsible, writePaymentRegistry }))
-    expect(elementResponsible).toHaveBeenCalledWith('M1', call)
-    expect(writePaymentRegistry.mock.calls[0]?.[5]).toBe(77)
+    await handleRegistryWriteJob(REGISTRY_JOB, registryDeps({ resolvePortalCall: async () => call, withResponsible, writePaymentRegistry }))
+    expect(seen).toEqual([['M1', call]])
+    expect(await writePaymentRegistry.mock.calls[0]![5]!()).toBe(77)
   })
 
-  it('не узнали ответственного — задача падает ДО записи, а не пишет элемент «на кого придётся»', async () => {
-    const writePaymentRegistry = vi.fn(async () => '101')
+  it('не узнали ответственного — задача падает, а не пишет элемент «на кого придётся»', async () => {
+    // Ответственный спрашивается внутри записи, только на ветке создания; его отказ — отказ записи.
     await expect(handleRegistryWriteJob(REGISTRY_JOB, registryDeps({
-      elementResponsible: async () => {
+      withResponsible: async (_m, _c, write) => write(async () => {
         throw new Error('profile молчит')
-      },
-      writePaymentRegistry
+      }),
+      writePaymentRegistry: async (_i, _co, _p, _sp, _call, responsible) => String(await responsible!())
     }))).rejects.toThrow('profile молчит')
-    expect(writePaymentRegistry).not.toHaveBeenCalled()
   })
 
   it('нет токена портала — БРОСАЕТ, а не «успех»', async () => {

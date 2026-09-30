@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { forgetTokenOwner, resetTokenOwnerCache, tokenOwnerId } from '../server/utils/portalTokenOwner'
+import { forgetTokenOwner, resetTokenOwnerCache, TOKEN_OWNER_TTL_MS, tokenOwnerId } from '../server/utils/portalTokenOwner'
 
 // «Человек, который всё установил» — владелец сохранённого токена портала. Один кэш на оба запасных
 // пути (системное дело и элементы смарт-процессов), иначе портал спрашивали бы дважды о том же.
@@ -42,6 +42,19 @@ describe('tokenOwnerId', () => {
     })
     await expect(tokenOwnerId(call, 'M', 'x')).rejects.toThrow('timeout')
     expect(await tokenOwnerId(call, 'M', 'x')).toBe(9)
+  })
+
+  it('помним ограниченное время: другие реплики, не видевшие переустановку, узнают нового установившего', async () => {
+    // Забыть при переустановке умеет только процесс, который её обработал; остальные — по сроку.
+    let t = 1_000_000
+    const call = vi.fn()
+      .mockResolvedValueOnce({ result: { ID: '15' } })
+      .mockResolvedValueOnce({ result: { ID: '16' } })
+    expect(await tokenOwnerId(call, 'M', 'x', () => t)).toBe(15)
+    t += TOKEN_OWNER_TTL_MS - 1
+    expect(await tokenOwnerId(call, 'M', 'x', () => t)).toBe(15)
+    t += 2
+    expect(await tokenOwnerId(call, 'M', 'x', () => t)).toBe(16)
   })
 
   it('forgetTokenOwner: после переустановки другим администратором спрашиваем заново', async () => {

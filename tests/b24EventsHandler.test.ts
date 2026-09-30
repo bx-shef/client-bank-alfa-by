@@ -393,8 +393,11 @@ describe('ONAPPUSERREADY (system user)', () => {
     const res = await handleEventRequest(userReady, deps)
     expect(res.status).toBe(200)
     expect(res.outcome).toBe('queued')
+    // The consumer re-verifies at write time anyway — an uninstall + instant reinstall may land in
+    // between — so even a claim the route verified carries the hash (never the token).
     expect(deps.enqueue).toHaveBeenCalledWith({
-      memberId: 'm1', domain: 'p.bitrix24.ru', kind: 'ONAPPUSERREADY', ts: '1756890123', systemUser: { userId: 512 }
+      memberId: 'm1', domain: 'p.bitrix24.ru', kind: 'ONAPPUSERREADY', ts: '1756890123',
+      systemUser: { userId: 512, appTokenHash: sha256(APP_TOKEN) }
     })
   })
 

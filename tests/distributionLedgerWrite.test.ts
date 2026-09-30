@@ -254,7 +254,7 @@ describe('writeLedgerAllocation (orchestrator)', () => {
       'crm.item.add': params => (params.entityTypeId === 1044 ? { result: { item: { id: 500 } } } : { result: { item: { id: 900 } } }),
       'crm.item.update': () => ({ result: { item: {} } })
     })
-    await writeLedgerAllocation(PSP, DSP, OP, TARGET, '12', call, 512)
+    await writeLedgerAllocation(PSP, DSP, OP, TARGET, '12', call, async () => 512)
     const adds = calls.filter(c => c.method === 'crm.item.add')
     expect(adds.map(c => (c.params.fields as Record<string, unknown>).assignedById)).toEqual([512, 512])
   })
@@ -316,7 +316,7 @@ describe('writeTriggerLedgerFact (§9.3 #6 — zero-amount trigger marker row)',
       'crm.item.list': () => ({ result: { items: [] } }),
       'crm.item.add': params => (params.entityTypeId === 1044 ? { result: { item: { id: 500 } } } : { result: { item: { id: 901 } } })
     })
-    await writeTriggerLedgerFact(PSP, DSP, OP, TRIGGER_TARGET, '12', call, 512)
+    await writeTriggerLedgerFact(PSP, DSP, OP, TRIGGER_TARGET, '12', call, async () => 512)
     const adds = calls.filter(c => c.method === 'crm.item.add')
     expect(adds.map(c => (c.params.fields as Record<string, unknown>).assignedById)).toEqual([512, 512])
   })

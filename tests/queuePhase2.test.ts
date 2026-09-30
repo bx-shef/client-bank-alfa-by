@@ -290,10 +290,10 @@ describe('handleEventJob', () => {
     expect(calls.save).toEqual([])
     expect(calls.del).toEqual([])
   })
-  it('сверенная роутом заявка едет без отпечатка, а по умолчанию попытка не последняя', async () => {
+  it('по умолчанию попытка не последняя', async () => {
     const { deps, calls } = fakeDeps()
-    await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 7 } }, deps)
-    expect(calls.sysUser).toEqual([[{ memberId: 'M', userId: 7 }, { finalAttempt: false }]])
+    await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 7, appTokenHash: 'h' } }, deps)
+    expect(calls.sysUser).toEqual([[{ memberId: 'M', userId: 7, appTokenHash: 'h' }, { finalAttempt: false }]])
   })
   it('битая задача без systemUser ничего не пишет', async () => {
     const { deps, calls } = fakeDeps()

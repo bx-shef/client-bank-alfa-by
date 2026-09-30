@@ -226,7 +226,7 @@ describe('#575 writePaymentRegistryViaRest', () => {
     const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
       ? { result: { items: [] } }
       : { result: { item: { id: '1' } } }))
-    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, 512)
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, async () => 512)
     const addParams = recorded(call).find(c => c[0] === 'crm.item.add')![1] as { fields: Record<string, unknown> }
     expect(addParams.fields.assignedById).toBe(512)
   })
@@ -237,10 +237,14 @@ describe('#575 writePaymentRegistryViaRest', () => {
     const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
       ? { result: { items: [{ id: '42' }] } }
       : { result: { item: {} } }))
-    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, 512)
+    // И даже НЕ спрашиваем, кого бы поставить: сбой базы или `profile` не имеет права ломать
+    // дозапись колонок существующего элемента (находка ревью).
+    const responsible = vi.fn(async () => 512)
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, responsible)
     const update = recorded(call).find(c => c[0] === 'crm.item.update')
     expect(update).toBeTruthy()
     expect((update![1] as { fields: Record<string, unknown> }).fields.assignedById).toBeUndefined()
+    expect(responsible).not.toHaveBeenCalled()
   })
 })
 
@@ -314,7 +318,7 @@ describe('#45 backfillPaymentRegistryViaRest', () => {
 
   it('создаваемый дозаписью элемент получает того же ответственного, что и на обычном пути', async () => {
     const call = fake([])
-    await backfillPaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, 512)
+    await backfillPaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, async () => 512)
     const add = recorded(call).find(([m]) => m === 'crm.item.add')
     expect((add![1].fields as Record<string, unknown>).assignedById).toBe(512)
   })

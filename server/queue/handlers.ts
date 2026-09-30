@@ -281,9 +281,9 @@ export interface HandlerDeps {
   getActivityId: (memberId: string, dedupKey: string) => Promise<string | null>
   /** Register a portal on ONAPPINSTALL — decrypt the refresh blob, upsert the token row. */
   savePortal: (job: EventJob) => Promise<void>
-  /** ONAPPUSERREADY — record the app's system user, verifying the event first when the route
-   *  could not (`applySystemUserClaim`). Throws `SystemUserPendingError` to retry while the install
-   *  is not persisted yet — except on the final attempt, where it gives up quietly. */
+  /** ONAPPUSERREADY — verify the claim against the token stored NOW and record the app's system user
+   *  (`applySystemUserClaim`). Throws `SystemUserPendingError` to retry while the install is not
+   *  persisted yet — except on the final attempt, where it gives up quietly. */
   saveSystemUser: (claim: SystemUserClaimJob, opts: { finalAttempt: boolean }) => Promise<SystemUserOutcome>
   /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges).
    *  `eventTs` (B24 event timestamp) records an ordering tombstone (#77) so a stale
@@ -315,11 +315,10 @@ export async function handleEventJob(
   if (job.kind === 'ONAPPUSERREADY') {
     // A job built by the webhook always carries `systemUser`; guard defensively for a malformed one.
     if (!job.systemUser) return { kind: job.kind, cleaned: false, registered: false }
-    const outcome = await deps.saveSystemUser({
-      memberId: job.memberId,
-      userId: job.systemUser.userId,
-      ...(job.systemUser.appTokenHash !== undefined ? { appTokenHash: job.systemUser.appTokenHash } : {})
-    }, { finalAttempt: ctx.finalAttempt ?? false })
+    const outcome = await deps.saveSystemUser(
+      { memberId: job.memberId, userId: job.systemUser.userId, appTokenHash: job.systemUser.appTokenHash },
+      { finalAttempt: ctx.finalAttempt ?? false }
+    )
     return { kind: job.kind, cleaned: false, registered: false, systemUser: outcome }
   }
   // ONAPPINSTALL: register the portal. `credentials` is always present for a
