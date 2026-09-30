@@ -69,8 +69,11 @@ describe('producer retention wiring', () => {
     // Second line behind the shape checks: BullMQ refuses an oversized payload instead of storing it.
     expect(opts.sizeLimit).toBeGreaterThan(0)
     expect(opts).toHaveProperty('jobId')
-    const { attempts, backoff } = SYSTEM_USER_RETRY_OPTS
-    let total = 0
+    const { attempts, backoff, delay } = SYSTEM_USER_RETRY_OPTS
+    // The first look is delayed too: a claim that beats the install failed its first attempt every
+    // time, costing a retry WARN and an error span per install (review of #783).
+    expect(delay).toBeGreaterThan(0)
+    let total = delay
     for (let n = 1; n < attempts; n++) total += backoff.delay * 2 ** (n - 1)
     expect(total, 'far above the normal second or two between the two events').toBeGreaterThanOrEqual(60_000)
     // A job bouncing in backoff counts as unfinished for the stall alert — stay inside its budget.

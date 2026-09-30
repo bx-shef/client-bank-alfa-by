@@ -20,22 +20,17 @@
 // мгновенной переустановкой, и верить нужно токену, который лежит в базе в момент записи, а не тому,
 // что лежал там при приёме события (находка ревью).
 //
-// ⚠ Отпечаток, а не сам токен: токен приложения — секрет, которым проверяется удаление приложения,
-// и лежать открытым текстом в Redis ему незачем. sha256 высокоэнтропийного токена не обратить.
+// ⚠ Отпечаток, а не сам токен (`appTokenHash.ts`): токен приложения — секрет, которым проверяется
+// удаление приложения, и лежать открытым текстом в Redis ему незачем.
 
-import { createHash } from 'node:crypto'
 import { safeEqual } from '../../app/utils/b24Events'
+import { applicationTokenHash } from './appTokenHash'
 import type { ResponsibleResolver } from './distributionLedgerWrite'
-import { portalErrorCode } from './portalError'
+import { portalErrorCode, portalErrorMethod } from './portalError'
 import { useServerLogger } from './serverLogger'
 import { portalHash } from './telemetryAttributes'
 
 const log = useServerLogger('b24-events')
-
-/** Отпечаток токена приложения — то, что едет в очередь вместо самого токена. */
-export function applicationTokenHash(token: string): string {
-  return createHash('sha256').update(token, 'utf8').digest('hex')
-}
 
 /**
  * Чем кончилась обработка события.
@@ -140,7 +135,9 @@ export async function applySystemUserClaim(
   if (!stored) {
     if (!opts.finalAttempt) throw new SystemUserPendingError(claim.memberId)
     // Хеш, а не `member_id`: заявка так и осталась непроверенной (как и ниже, при несовпадении).
-    log.warning(`portal ${portalHash(claim.memberId)}: служебный пользователь НЕ записан — установка так и не записалась, сверить событие не с чем; элементы останутся на установившем`)
+    // «Нет строки» бывает двумя путями — установка так и не записалась либо портал удалили, пока
+    // заявка ждала повтора, — и различить их здесь нечем, поэтому названы оба.
+    log.warning(`portal ${portalHash(claim.memberId)}: служебный пользователь НЕ записан — установки нет (не записалась или портал успели удалить), сверить событие не с чем; элементы останутся на установившем`)
     return 'expired'
   }
   // ⚠ Сравнение без раннего выхода: по времени ответа нельзя угадывать отпечаток по символу.
@@ -152,30 +149,41 @@ export async function applySystemUserClaim(
     log.info(`portal ${claim.memberId}: служебный пользователь не записан — портала у нас уже нет`)
     return 'gone'
   }
-  forgetSystemUserRefusal(claim.memberId)
   log.info(`portal ${claim.memberId}: служебный пользователь записан (id ${claim.userId}) — на него пойдут новые элементы смарт-процессов`)
   return 'saved'
 }
 
 /**
- * Коды отказа портала, которые к ответственному отношения не имеют: лимиты, перегрузка, сбой сервера,
- * протухший токен. На них повторять запись на установившем бессмысленно — повторит сама задача.
+ * Коды, которыми `crm.item.add` по документации отвечает на неверное значение поля
+ * (`CRM_FIELD_ERROR_VALUE_NOT_VALID`) и на запрет (`ACCESS_DENIED`). Только они и значат «портал не
+ * принял ответственного», и только если отказал сам вызов создания элемента — тот, что нёс поле.
+ *
+ * ⚠ Список РАЗРЕШЁННЫХ, а не исключённых кодов (находка ревью #783). Прежний вариант перечислял
+ * «временные» коды, и мимо него проходило всё, что SDK отдаёт на сбой транспорта со своим кодом —
+ * `NETWORK_ERROR`, `REQUEST_TIMEOUT`, `ECONNRESET`, а заодно `invalid_grant` и `PAYMENT_REQUIRED`.
+ * Одна такая ошибка переводила портал на установившего на десять минут, а в лог шла неправда
+ * «портал не принимает служебного пользователя». Какой код портал вернёт на самом деле, не
+ * замерено: окажется другим — запись упадёт честно, с текстом портала в логе, и код добавится сюда.
+ * ⚠ `ACCESS_DENIED` на создании бывает и без всякого ответственного (у установившего нет прав на
+ * смарт-процесс) — тогда повтор без поля упадёт тем же отказом, память не ставится, цена — один
+ * лишний вызов.
  */
-const TRANSIENT_PORTAL_CODES = new Set([
-  'QUERY_LIMIT_EXCEEDED', 'OPERATION_TIME_LIMIT', 'OVERLOAD_LIMIT', 'INTERNAL_SERVER_ERROR',
-  'ERROR_UNEXPECTED_ANSWER', 'EXPIRED_TOKEN', 'INVALID_TOKEN', 'NO_AUTH_FOUND'
-])
+const RESPONSIBLE_REFUSAL_CODES = new Set(['CRM_FIELD_ERROR_VALUE_NOT_VALID', 'ACCESS_DENIED'])
 
 /** Сколько помним, что портал не принимает служебного пользователя ответственным (см. ниже). */
 export const SYSTEM_USER_REFUSAL_TTL_MS = 10 * 60_000
 
-/** Порталы, отказавшие служебному пользователю в роли ответственного, → до какого момента помним. */
+/**
+ * Отказы → до какого момента помним. Ключ — ПАРА «портал + служебный пользователь», а не портал.
+ *
+ * ⚠ Память живёт в процессе, который пишет элементы (контейнеры `worker`), а новый служебный
+ * пользователь записывается событием в ДРУГОМ процессе (обработчик событий — на `backend`). Сброс
+ * памяти по событию, как было в первой редакции, чистил пустую карту не того процесса (находка
+ * ревью #783). С парой в ключе сбрасывать нечего: новый id — новый ключ, в любом процессе.
+ */
 const refusedUntil = new Map<string, number>()
 
-/** Забыть отказ портала — пришёл новый служебный пользователь, переустановка или удаление. */
-export function forgetSystemUserRefusal(memberId: string): void {
-  refusedUntil.delete(memberId)
-}
+const refusalKey = (memberId: string, userId: number): string => `${memberId}|${userId}`
 
 /** Для тестов: модульная память иначе протекает между случаями. */
 export function resetSystemUserRefusals(): void {
@@ -198,7 +206,7 @@ export function resetSystemUserRefusals(): void {
  * ⚠ «Нет поддержки» бывает ДВУХ видов, и второй ловится только ответом портала. Первый — события не
  * было (ноль в колонке: локальное приложение, установка до этой правки). Второй — событие было, но
  * портал не принимает служебного пользователя ответственным. Замерить это заранее негде, поэтому:
- * портал ОТКАЗАЛ (ответил кодом, и код не из временных) на записи со служебным пользователем → та же
+ * создание элемента со служебным пользователем ОТКАЗАНО кодом из `RESPONSIBLE_REFUSAL_CODES` → та же
  * запись повторяется без поля, то есть на установившем. Повтор безопасен: писатели find-or-create по
  * маркеру, и то, что успело создаться, найдётся, а не задвоится.
  *
@@ -218,9 +226,16 @@ export async function withElementResponsible<T>(
   let chosen: Promise<number | null> | undefined
   const primary: ResponsibleResolver = () => {
     chosen ??= (async () => {
-      if ((refusedUntil.get(memberId) ?? 0) > now()) return null
-      systemUserUsed = await deps.loadSystemUserId(memberId)
-      return systemUserUsed
+      const id = await deps.loadSystemUserId(memberId)
+      if (id === null) return null
+      const key = refusalKey(memberId, id)
+      const until = refusedUntil.get(key)
+      if (until !== undefined) {
+        if (until > now()) return null
+        refusedUntil.delete(key) // истёкшее — прочь, иначе карта копила бы мусор
+      }
+      systemUserUsed = id
+      return id
     })()
     return chosen
   }
@@ -228,10 +243,11 @@ export async function withElementResponsible<T>(
     return await write(primary)
   } catch (e) {
     const code = portalErrorCode(e).toUpperCase()
-    if (systemUserUsed === null || !code || TRANSIENT_PORTAL_CODES.has(code)) throw e
+    const refusal = RESPONSIBLE_REFUSAL_CODES.has(code) && portalErrorMethod(e) === 'crm.item.add'
+    if (systemUserUsed === null || !refusal) throw e
     log.warning(`portal ${memberId}: портал отказал в записи элемента на служебного пользователя ${systemUserUsed} (${code}) — повторяем на установившем`)
     const result = await write(installer)
-    refusedUntil.set(memberId, now() + SYSTEM_USER_REFUSAL_TTL_MS)
+    refusedUntil.set(refusalKey(memberId, systemUserUsed), now() + SYSTEM_USER_REFUSAL_TTL_MS)
     log.warning(`portal ${memberId}: на установившем запись прошла — служебного пользователя этот портал ответственным не принимает; ближайшие ${SYSTEM_USER_REFUSAL_TTL_MS / 60_000} мин элементы идут на установившего`)
     return result
   }

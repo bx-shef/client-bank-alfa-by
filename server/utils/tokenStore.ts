@@ -426,6 +426,16 @@ export async function setSystemUserId(query: QueryFn, memberId: string, userId: 
  * строкой, и ноль (умолчание колонки) обязан читаться как «нет», а не как пользователь 0.
  */
 export async function getSystemUserId(query: QueryFn, memberId: string): Promise<number | null> {
-  const rows = await query(`SELECT system_user_id FROM portal_tokens WHERE member_id = $1`, [memberId])
+  let rows: unknown[]
+  try {
+    rows = await query(`SELECT system_user_id FROM portal_tokens WHERE member_id = $1`, [memberId])
+  } catch (e) {
+    // ⚠ Колонки ещё нет (`42703`, undefined_column) — окно выката: схему мигрирует `backend`, а
+    // контейнеры `worker` стартуют с `RUN_MIGRATION=0` и могут взяться за запись раньше. Отвечать
+    // «не знаем» здесь честно: это ровно «ставим установившего», а падение превратило бы несколько
+    // секунд выката в отказы реестра (находка ревью #783). Любая другая ошибка — наружу.
+    if ((e as { code?: unknown } | null)?.code === '42703') return null
+    throw e
+  }
   return portalUserId((rows[0] as { system_user_id?: unknown } | undefined)?.system_user_id)
 }

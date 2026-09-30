@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { firstPortalErrorCode, isSettingsRejection, PortalRestError, portalErrorCode } from '../server/utils/portalError'
+import { firstPortalErrorCode, isSettingsRejection, PortalRestError, portalErrorCode, portalErrorMethod } from '../server/utils/portalError'
 
 // Машинный код ошибки портала (#572).
 //
@@ -143,5 +143,28 @@ describe('portalErrorCode: обёртка SDK (#574)', () => {
   it('мусор не роняет', () => {
     expect(portalErrorCode(null)).toBe('')
     expect(portalErrorCode({ originalError: null })).toBe('')
+  })
+})
+
+describe('portalErrorMethod — на каком вызове отказал портал (#783)', () => {
+  it('из нашей ошибки — поле method', () => {
+    expect(portalErrorMethod(new PortalRestError('no', 'ACCESS_DENIED', 'crm.item.add'))).toBe('crm.item.add')
+  })
+
+  it('из голой ошибки SDK (жёсткие коды он бросает сам) — requestInfo.method', () => {
+    const e = Object.assign(new Error('no'), { code: 'ACCESS_DENIED', requestInfo: { method: 'crm.item.list' } })
+    expect(portalErrorMethod(e)).toBe('crm.item.list')
+  })
+
+  it('из обёртки SDK — на один уровень вглубь, как и код', () => {
+    const e = Object.assign(new Error('wrapped'), {
+      code: 'JSSDK_UNKNOWN_ERROR',
+      originalError: new PortalRestError('no', 'CRM_FIELD_ERROR_VALUE_NOT_VALID', 'crm.item.add')
+    })
+    expect(portalErrorMethod(e)).toBe('crm.item.add')
+  })
+
+  it.each([[null], [undefined], ['строка'], [new Error('сеть')], [{ method: 42 }]])('метода нет — пустая строка: %j', (e) => {
+    expect(portalErrorMethod(e)).toBe('')
   })
 })

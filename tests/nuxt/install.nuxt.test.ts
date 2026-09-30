@@ -226,15 +226,49 @@ describe('install.vue — inside a B24 frame', () => {
     expect(inBatch).toBe(false)
   })
 
+  /** Ответ портала на подписку ONAPPUSERREADY: отказ с кодом `code`, остальные вызовы — успех. */
+  const refuseSystemUserBind = (code: string) => callSpy.mockImplementation(async (arg?: unknown) => {
+    const bad = (arg as BindArg)?.params?.event === 'ONAPPUSERREADY'
+    return {
+      isSuccess: !bad,
+      getData: () => ({ result: !bad }),
+      getErrorMessages: () => (bad ? ['Описание на языке портала'] : []),
+      getErrors: () => (bad ? [Object.assign(new Error('Описание на языке портала'), { code })] : [])[Symbol.iterator]()
+    }
+  })
+
   it('портал не знает события (ERROR_EVENT_NOT_FOUND) — установка ВСЁ РАВНО завершается', async () => {
-    callSpy.mockImplementation(async (arg?: unknown) => {
-      const bad = (arg as BindArg)?.params?.event === 'ONAPPUSERREADY'
-      return { isSuccess: !bad, getData: () => ({ result: !bad }), getErrorMessages: () => (bad ? ['Event not found'] : []) }
-    })
+    refuseSystemUserBind('ERROR_EVENT_NOT_FOUND')
     const wrapper = await mountSuspended(InstallPage)
     await vi.advanceTimersByTimeAsync(2000)
     expect(finishSpy).toHaveBeenCalled()
     expect(wrapper.text()).not.toContain('Ошибка установки')
+    expect(wrapper.text()).toContain('недоступно на этом портале')
+  })
+
+  it('отказ по ДРУГОЙ причине не выдаётся за «недоступно на этом портале» (находка ревью #783)', async () => {
+    // Сеть, права, сбой портала ничего не говорят о том, знает ли портал событие.
+    refuseSystemUserBind('ACCESS_DENIED')
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('недоступно на этом портале')
+    expect(wrapper.text()).toContain('подписаться не удалось')
+  })
+
+  it('ЧУЖОЙ обработчик события не снимается — свой ставится рядом (находка ревью #783)', async () => {
+    // Чужим может оказаться автоматический обработчик портала; снятие ничего не даёт, а лишняя
+    // доставка безвредна.
+    batchSpy.mockImplementation(async () => ({
+      isSuccess: true,
+      getData: () => ({ scope: ['crm'], eventList: [{ event: 'ONAPPUSERREADY', handler: 'https://other.example/install' }] }),
+      getErrorMessages: () => [] as string[]
+    }))
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(systemUserBinds()).toHaveLength(1)
+    const unbound = [...batchSpy.mock.calls, ...callSpy.mock.calls].some(c => JSON.stringify(c).includes('event.unbind') && JSON.stringify(c).includes('ONAPPUSERREADY'))
+    expect(unbound).toBe(false)
   })
 
   it('уже подписано на наш обработчик — повторно не подписываем', async () => {

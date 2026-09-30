@@ -3,7 +3,8 @@ import type { StatementItem } from '../app/types/statement'
 import type { AllocationCandidate } from '../app/utils/allocation'
 import type { HandlerDeps } from '../server/queue/handlers'
 import type { RegistryWriteJobDeps } from '../server/utils/deferredWriteJobs'
-import { applicationTokenHash, resetSystemUserRefusals } from '../server/utils/systemUser'
+import { resetSystemUserRefusals } from '../server/utils/systemUser'
+import { applicationTokenHash } from '../server/utils/appTokenHash'
 
 // Ответственный элементов смарт-процессов в НАСТОЯЩЕМ воркере (решение владельца 2026-09-29):
 // служебный пользователь приложения, а где его нет — установивший, то есть поле НЕ передаём

@@ -35,9 +35,11 @@ import { portalUserId } from '~/utils/portalUser'
 export const B24_EVENT_INSTALL = 'ONAPPINSTALL'
 /** Event code B24 sends on uninstall (no OAuth data — token-only authenticity). */
 export const B24_EVENT_UNINSTALL = 'ONAPPUNINSTALL'
-/** Event code B24 sends when it created (or re-activated) the app's system user. Declared HERE, not
- *  in `config/b24.ts`: this module is imported by session code for `safeEqual`, and the config pulls
- *  the FAQ text in (review of #783). The config re-exports it for the install page. */
+/** Event code B24 sends when it created (or re-activated) the app's system user — the only source of
+ *  its id (owner's decision 2026-09-29: smart-process elements go on it). Declared HERE, not in
+ *  `config/b24.ts`: this module is imported by session code for `safeEqual`, and the config pulls the
+ *  FAQ text in; the install page imports it from here directly (review of #783 — a re-export from the
+ *  config pulled this whole module into every page that reads the config). */
 export const B24_EVENT_SYSTEM_USER = 'ONAPPUSERREADY'
 
 /**
@@ -46,11 +48,16 @@ export const B24_EVENT_SYSTEM_USER = 'ONAPPUSERREADY'
  * them a forged request could park megabytes of `member_id` in Redis keys, job data and the event
  * stream, and a `member_id` with a newline would forge whole log lines (review of #783). Generous
  * for real values: member ids and app tokens are 32 hex characters, `ts` is Unix seconds.
+ *
+ * ⚠ `domain` is only BOUNDED, not validated as a host name: nothing on this path calls the portal by
+ * it, and a strict host pattern rejected legitimate boxes silently (review of #783) — an underscore
+ * in an internal name, a Cyrillic `.рф`/`.бел` address as the box may report it. Whitespace and
+ * control characters stay out: they are what would forge a log line.
  */
 const SYSTEM_USER_EVENT_SHAPE = {
   memberId: /^[\w-]{1,64}$/,
   applicationToken: /^[\w-]{1,128}$/,
-  domain: /^[a-z0-9.-]{1,253}(?::\d{1,5})?$/i,
+  domain: /^[^\s\p{Cc}]{1,253}$/u,
   ts: /^\d{1,12}$/
 } as const
 

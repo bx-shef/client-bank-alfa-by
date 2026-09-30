@@ -576,4 +576,18 @@ describe('служебный пользователь приложения — s
     expect(await getSystemUserId(query, 'M1')).toBe(expected)
     expect(calls[0]!.sql).toMatch(/WHERE member_id = \$1/)
   })
+
+  it('колонки ещё нет (42703, окно выката: воркер стартовал раньше миграции) — «не знаем», а не отказ', async () => {
+    const query = vi.fn(async () => {
+      throw Object.assign(new Error('column "system_user_id" does not exist'), { code: '42703' })
+    })
+    expect(await getSystemUserId(query, 'M1')).toBeNull()
+  })
+
+  it('любая ДРУГАЯ ошибка базы — наружу: «не смогли прочитать» не равно «не знаем»', async () => {
+    const query = vi.fn(async () => {
+      throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' })
+    })
+    await expect(getSystemUserId(query, 'M1')).rejects.toThrow('connection refused')
+  })
 })

@@ -44,7 +44,7 @@ import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTrigg
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
 import { getApplicationToken, getSystemUserId, saveToken, setSystemUserId, clearSubscriptionEnded } from '../utils/tokenStore'
-import { applySystemUserClaim, forgetSystemUserRefusal, withElementResponsible } from '../utils/systemUser'
+import { applySystemUserClaim, withElementResponsible } from '../utils/systemUser'
 import type { ResponsibleResolver } from '../utils/distributionLedgerWrite'
 import { markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
 import { saveBatchError, saveBatchResult } from '../utils/importBatchStore'
@@ -700,10 +700,9 @@ export function liveHandlerDeps(): HandlerDeps {
         expiresAt: c.expiresAt,
         applicationToken: c.applicationToken
       }, Number(job.ts) || 0)
-      // A reinstall may bring a different system user — forget a remembered refusal of the old one.
-      forgetSystemUserRefusal(job.memberId)
     },
-    // ONAPPUSERREADY (the app's system user): verify when the route could not, then record.
+    // ONAPPUSERREADY (the app's system user): ALWAYS verify against the token stored now, then record
+    // (the route's own check may predate an uninstall + reinstall — see `applySystemUserClaim`).
     saveSystemUser: (claim, opts) => applySystemUserClaim(claim, {
       loadApplicationToken: memberId => getApplicationToken(dbQuery, memberId),
       setSystemUserId: (memberId, userId) => setSystemUserId(dbQuery, memberId, userId)
@@ -754,7 +753,6 @@ export function liveHandlerDeps(): HandlerDeps {
       // оставляя банковские креды удалённого приложения — и `bankTokenKeepAlive` их обновлял.
       await purgePortalStorage(dbQuery, memberId, eventTs, LIVE_PORTAL_PURGE_DEPS)
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
-      forgetSystemUserRefusal(memberId) // память об отказе служебному пользователю — туда же
       resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync

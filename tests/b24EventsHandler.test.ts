@@ -483,6 +483,10 @@ describe('ONAPPUSERREADY (system user)', () => {
     const deps = makeReqDeps()
     const res = await handleEventRequest({ ...userReady, data: { user_id: '0x11' } }, deps)
     expect(res.status).toBe(400)
+    // The reason names the field (never the value): without it a rejected legitimate event would look
+    // like any other 400 (review of #783).
+    expect((res.body as { reason?: string }).reason).toMatch(/user_id/)
+    expect(JSON.stringify(res.body)).not.toContain('0x11')
     expect(deps.loadStoredToken).not.toHaveBeenCalled()
     expect(deps.enqueue).not.toHaveBeenCalled()
   })

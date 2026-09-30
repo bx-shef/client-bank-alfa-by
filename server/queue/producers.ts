@@ -49,9 +49,14 @@ export const CREDENTIAL_JOB_RETENTION = {
  * install. So the consumer waits for the install by retrying: 5+10+20+40+80 seconds ≈ two and a half
  * minutes of patience, far above the gap that network call can plausibly open. The last attempt gives
  * up QUIETLY (see `applySystemUserClaim`): an exhausted job would count as our failure.
+ *
+ * ⚠ The FIRST look is delayed too (`delay`): measured on a real BullMQ, a claim that beats the install
+ * failed its first attempt every time (the install landed ~0.8 s later), costing a retry WARN line and
+ * an error span per install for a retry that was expected all along (review of #783).
  */
 export const SYSTEM_USER_RETRY_OPTS = {
   attempts: 6,
+  delay: 3_000,
   backoff: { type: 'exponential' as const, delay: 5_000 },
   // Second line behind the shape checks of `parseSystemUserEvent`: this job may be queued before it
   // is authenticated, and BullMQ refuses a payload over the limit instead of storing it.

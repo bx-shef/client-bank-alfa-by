@@ -216,7 +216,8 @@ describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
     ['member_id', 'a b'],
     ['application_token', 't'.repeat(129)],
     ['application_token', 'tok\r\nX'],
-    ['domain', 'evil.example/path'],
+    ['domain', 'evil.example\n[auth] ERROR: fake'],
+    ['domain', 'a b'],
     ['domain', 'a'.repeat(254)]
   ])('rejects a malformed auth.%s before anything looks at it', (field, value) => {
     const p = payload() as { auth: Record<string, unknown> }
@@ -236,9 +237,16 @@ describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
     expect(() => parseSystemUserEvent(p)).toThrow(/^(?!.*SECRET-LOOKING-VALUE).*$/s)
   })
 
-  it('accepts the shapes real portals send: 32-hex ids, a self-hosted host with a port', () => {
+  it.each([
+    ['portal.example.by:8443'], // коробка с портом
+    ['crm_portal.local'], // подчёркивание во внутреннем имени (находка ревью #783)
+    ['crm.компания.рф'], // кириллический адрес коробки, если портал пришлёт его как есть
+    ['[2001:db8::1]:8080'] // IPv6-литерал
+  ])('accepts the host shapes real portals send: %s', (domain) => {
+    // The domain is only bounded: nothing on this path calls the portal by it, and a strict host
+    // pattern silently lost the system user of a legitimate box.
     const p = payload() as { auth: Record<string, unknown> }
-    p.auth.domain = 'portal.example.by:8443'
+    p.auth.domain = domain
     expect(parseSystemUserEvent(p).userId).toBe(512)
   })
 

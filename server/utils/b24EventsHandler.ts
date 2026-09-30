@@ -25,7 +25,7 @@ import { B24_DELETION_EVENTS } from '../../app/config/b24'
 import type { DeletionJob, EventJob } from '../queue/topology'
 import type { PortalToken } from './tokenStore'
 import type { InstallMemberResult } from './verifyInstallMember'
-import { applicationTokenHash } from './systemUser'
+import { applicationTokenHash } from './appTokenHash'
 
 /** Raw deletion-entity fields extracted at ingestion (classification is deferred to the consumer,
  *  which has the portal's SP config). `id` is a validated digit string. */
@@ -157,8 +157,11 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     let claim
     try {
       claim = parseSystemUserEvent(payload)
-    } catch {
-      return { status: 400, body: { error: `malformed ${B24_EVENT_SYSTEM_USER}` } }
+    } catch (e) {
+      // The parser's messages name the FIELD and never echo its value (see `parseSystemUserEvent`),
+      // so the reason is safe to return — and without it a rejected legitimate event looks like any
+      // other 400 (review of #783).
+      return { status: 400, body: { error: `malformed ${B24_EVENT_SYSTEM_USER}`, reason: e instanceof Error ? e.message : '' } }
     }
     // What travels to the queue is a HASH of the token, never the token itself; the consumer
     // re-verifies it against the token stored at WRITE time (an uninstall + instant reinstall may land

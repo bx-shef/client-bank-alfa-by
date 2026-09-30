@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  admitDeferredClaim, applicationTokenHash, applySystemUserClaim, MAX_DEFERRED_CLAIMS_PER_MINUTE,
+  admitDeferredClaim, applySystemUserClaim, MAX_DEFERRED_CLAIMS_PER_MINUTE,
   resetSystemUserRefusals, SYSTEM_USER_REFUSAL_TTL_MS, SystemUserPendingError, withElementResponsible
 } from '../server/utils/systemUser'
+import { applicationTokenHash } from '../server/utils/appTokenHash'
 import { PortalRestError } from '../server/utils/portalError'
 
 // Служебный пользователь приложения (ONAPPUSERREADY): сверка в воркере и выбор ответственного
@@ -98,7 +99,7 @@ describe('withElementResponsible — служебный пользователь
     const write = async (r: R) => {
       const id = await r()
       seen.push(id)
-      if (id === 512) throw refusal('INVALID_ARG_VALUE')
+      if (id === 512) throw refusal('CRM_FIELD_ERROR_VALUE_NOT_VALID')
       return 'ok'
     }
     expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).toBe('ok')
@@ -114,7 +115,7 @@ describe('withElementResponsible — служебный пользователь
     expect(write).toHaveBeenCalledTimes(1)
   })
 
-  it('после удачного повтора портал помнится недолго: следующие записи сразу на установившего, без чтения базы', async () => {
+  it('после удачного повтора портал помнится недолго: следующие записи сразу на установившего', async () => {
     let t = 1_000_000
     const now = () => t
     const loadSystemUserId = vi.fn(async () => 512)
@@ -124,9 +125,7 @@ describe('withElementResponsible — служебный пользователь
       return id
     }
     await withElementResponsible('M', { loadSystemUserId, now }, write)
-    expect(loadSystemUserId).toHaveBeenCalledTimes(1)
     expect(await withElementResponsible('M', { loadSystemUserId, now }, r => r())).toBeNull()
-    expect(loadSystemUserId).toHaveBeenCalledTimes(1)
     t += SYSTEM_USER_REFUSAL_TTL_MS + 1
     expect(await withElementResponsible('M', { loadSystemUserId, now }, r => r())).toBe(512)
   })
@@ -144,21 +143,25 @@ describe('withElementResponsible — служебный пользователь
   it('повтор на установившем ТОЖЕ упал — значит мешал не ответственный: ошибка наружу, отказ не помним', async () => {
     const write = async (r: R) => {
       await r()
-      throw refusal('INVALID_ARG_VALUE')
+      throw refusal('CRM_FIELD_ERROR_VALUE_NOT_VALID')
     }
     await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow('portal said no')
     expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, r => r())).toBe(512)
   })
 
-  it.each([['QUERY_LIMIT_EXCEEDED'], ['INTERNAL_SERVER_ERROR'], ['expired_token']])(
-    'временный отказ портала (%s) — не повод ставить на установившего: повторит сама задача', async (code) => {
-      const write = vi.fn(async (r: R) => {
-        await r()
-        throw refusal(code)
-      })
-      await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
-      expect(write).toHaveBeenCalledTimes(1)
+  it.each([
+    ['QUERY_LIMIT_EXCEEDED'], ['INTERNAL_SERVER_ERROR'], ['expired_token'],
+    // Коды, которые SDK ставит на сбой ТРАНСПОРТА, и отказы не про ответственного (находка ревью #783):
+    // прежний список «временных» их пропускал, и один сетевой сбой переводил портал на установившего.
+    ['NETWORK_ERROR'], ['REQUEST_TIMEOUT'], ['ECONNRESET'], ['invalid_grant'], ['PAYMENT_REQUIRED'], ['INVALID_ARG_VALUE']
+  ])('отказ не про ответственного (%s) — не повод ставить на установившего: повторит сама задача', async (code) => {
+    const write = vi.fn(async (r: R) => {
+      await r()
+      throw refusal(code)
     })
+    await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
+    expect(write).toHaveBeenCalledTimes(1)
+  })
 
   it('сетевой сбой (кода нет) — тоже без повтора на установившем', async () => {
     const write = vi.fn(async (r: R) => {
@@ -177,15 +180,57 @@ describe('withElementResponsible — служебный пользователь
     expect(write).toHaveBeenCalledTimes(1)
   })
 
-  it('записанный новый служебный пользователь снимает память об отказе', async () => {
+  it('память об отказе — на ПАРУ портал+пользователь: новый служебный пользователь идёт сразу, без всякого сброса', async () => {
+    // Сброс по событию чистил бы карту НЕ того процесса: событие пишет `backend`, элементы — `worker`.
     const write = async (r: R) => {
       const id = await r()
       if (id === 512) throw refusal('ACCESS_DENIED')
       return id
     }
     await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)
-    await applySystemUserClaim({ memberId: 'M', userId: 600, appTokenHash: HASH }, deps(TOKEN), { finalAttempt: false })
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, r => r())).toBeNull()
     expect(await withElementResponsible('M', { loadSystemUserId: async () => 600 }, r => r())).toBe(600)
+  })
+
+  it('тот же код, но отказал НЕ вызов создания (поиск, пересчёт) — повтора нет: там ответственного не было', async () => {
+    for (const method of ['crm.item.list', 'crm.item.update']) {
+      const write = vi.fn(async (r: R) => {
+        await r()
+        throw new PortalRestError('portal said no', 'ACCESS_DENIED', method)
+      })
+      await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
+      expect(write).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('отказ пришёл голой ошибкой SDK (код и метод в её полях, не наш PortalRestError) — распознан', async () => {
+    // Жёсткие коды SDK бросает сам, мимо нашего транспорта; метод у такой ошибки — в `requestInfo`.
+    const seen: (number | null)[] = []
+    const write = async (r: R) => {
+      const id = await r()
+      seen.push(id)
+      if (id === 512) throw Object.assign(new Error('Доступ запрещён'), { code: 'ACCESS_DENIED', requestInfo: { method: 'crm.item.add' } })
+      return 'ok'
+    }
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).toBe('ok')
+    expect(seen).toEqual([512, null])
+  })
+
+  it('отказ завёрнут SDK в JSSDK_UNKNOWN_ERROR — код и метод берутся из вложенной ошибки', async () => {
+    const seen: (number | null)[] = []
+    const write = async (r: R) => {
+      const id = await r()
+      seen.push(id)
+      if (id === 512) {
+        throw Object.assign(new Error('wrapped'), {
+          code: 'JSSDK_UNKNOWN_ERROR',
+          originalError: new PortalRestError('portal said no', 'CRM_FIELD_ERROR_VALUE_NOT_VALID', 'crm.item.add')
+        })
+      }
+      return 'ok'
+    }
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).toBe('ok')
+    expect(seen).toEqual([512, null])
   })
 })
 

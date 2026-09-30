@@ -87,7 +87,12 @@ export default defineEventHandler(async (event) => {
     if (result.action) {
       // member_id is a non-secret routing id; outcome tells whether the worker will
       // persist (queued) or we already wrote it here (sync-fallback, Redis down).
-      log.info(`${result.action.type} member_id=${result.action.memberId} (${result.outcome})`)
+      // ⚠ An UNVERIFIED system-user claim is named by the portal hash: its member_id is whatever the
+      // sender wrote, and the log should not attribute it to a real portal before the worker checks.
+      const who = result.action.type === 'system-user' && !result.action.verified
+        ? `portal=${portalHash(result.action.memberId)} unverified`
+        : `member_id=${result.action.memberId}`
+      log.info(`${result.action.type} ${who} (${result.outcome})`)
     }
 
     setResponseStatus(event, result.status)
