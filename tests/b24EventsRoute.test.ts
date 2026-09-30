@@ -97,10 +97,19 @@ describe('маршрут событий: служебный пользовате
   })
 
   it('несверенная заявка проходит через НАСТОЯЩИЙ потолок — со счётчиком текущей минуты', async () => {
-    await route({})
+    // Подменены только часы, таймеры живые (у потолка свой дедлайн на setTimeout). Без фиксации
+    // граница минуты между вызовом маршрута и проверкой изредка разводила бы ключи.
+    const now = Date.parse('2026-09-30T12:00:30Z')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(now)
+    try {
+      await route({})
+    } finally {
+      vi.useRealTimers()
+    }
     expect(h.incrCalls).toHaveLength(1)
     const [key, ttl] = h.incrCalls[0]!
-    expect(key).toBe(`sysuser-deferred:${Math.floor(Date.now() / 60_000)}`) // живые часы, а не замороженные
+    expect(key).toBe(`sysuser-deferred:${Math.floor(now / 60_000)}`) // часы маршрута, а не константа
     expect(ttl).toBeGreaterThan(60)
     expect(h.enqueued).toHaveLength(1) // счёт 1 — пускаем
   })
