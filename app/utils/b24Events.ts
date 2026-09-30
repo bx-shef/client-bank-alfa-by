@@ -1,6 +1,7 @@
-// Pure handlers for Bitrix24 outgoing event webhooks: ONAPPINSTALL and
-// ONAPPUNINSTALL. No I/O — parses/validates the event envelope, extracts the
-// per-portal credentials to persist, authenticates the call via
+// Pure handlers for Bitrix24 outgoing event webhooks: ONAPPINSTALL,
+// ONAPPUNINSTALL and ONAPPUSERREADY (the app's system user). No I/O —
+// parses/validates the event envelope, extracts the per-portal credentials
+// to persist, authenticates the call via
 // application_token, and decides what the backend should do (store / purge /
 // ignore). The HTTP transport, the token store and the side effects live in the
 // engine (backend); these helpers are unit-testable offline and portable.
@@ -25,13 +26,40 @@ import type {
   B24InstallEventData,
   B24UninstallEvent,
   B24UninstallEventData,
-  PortalCredentials
+  PortalCredentials,
+  SystemUserClaim
 } from '~/types/b24Events'
+import { portalUserId } from '~/utils/portalUser'
 
 /** Event code B24 sends right after a successful install (carries OAuth + token). */
 export const B24_EVENT_INSTALL = 'ONAPPINSTALL'
 /** Event code B24 sends on uninstall (no OAuth data — token-only authenticity). */
 export const B24_EVENT_UNINSTALL = 'ONAPPUNINSTALL'
+/** Event code B24 sends when it created (or re-activated) the app's system user — the only source of
+ *  its id (owner's decision 2026-09-29: smart-process elements go on it). Declared HERE, not in
+ *  `config/b24.ts`: this module is imported by session code for `safeEqual`, and the config pulls the
+ *  FAQ text in; the install page imports it from here directly (review of #783 — a re-export from the
+ *  config pulled this whole module into every page that reads the config). */
+export const B24_EVENT_SYSTEM_USER = 'ONAPPUSERREADY'
+
+/**
+ * Shape limits for ONAPPUSERREADY — the ONLY event whose fields may reach the queue before they are
+ * authenticated (the install may not be persisted yet, see `server/utils/systemUser.ts`). Without
+ * them a forged request could park megabytes of `member_id` in Redis keys, job data and the event
+ * stream, and a `member_id` with a newline would forge whole log lines (review of #783). Generous
+ * for real values: member ids and app tokens are 32 hex characters, `ts` is Unix seconds.
+ *
+ * ⚠ `domain` is only BOUNDED, not validated as a host name: nothing on this path calls the portal by
+ * it, and a strict host pattern rejected legitimate boxes silently (review of #783) — an underscore
+ * in an internal name, a Cyrillic `.рф`/`.бел` address as the box may report it. Whitespace and
+ * control characters stay out: they are what would forge a log line.
+ */
+const SYSTEM_USER_EVENT_SHAPE = {
+  memberId: /^[\w-]{1,64}$/,
+  applicationToken: /^[\w-]{1,128}$/,
+  domain: /^[^\s\p{Cc}]{1,253}$/u,
+  ts: /^\d{1,12}$/
+} as const
 
 /** Verdict of the event-broker authenticity gate (see appTokenVerdict). */
 export type B24AppTokenVerdict = 'accept' | 'forbidden' | 'unconfigured'
@@ -177,6 +205,46 @@ export function parseUninstallEvent(payload: unknown): B24UninstallEvent {
   const auth = parseEventAuth(payload)
   const data = ((payload as { data?: unknown }).data ?? {}) as B24UninstallEventData
   return { ...(payload as B24Event<B24UninstallEventData>), auth, data }
+}
+
+/**
+ * Parse + validate ONAPPUSERREADY — «the portal created (or re-activated) the app's system user».
+ * Throws on a malformed payload. Only the user id is taken: the long-lived authorization in `data`
+ * is deliberately left behind (see `SystemUserClaim`).
+ *
+ * ⚠ The id goes through the same strict parser as every other portal user id (`portalUserId`):
+ * it will become the responsible of CRM elements, and whether the portal validates that field there
+ * is not measured (on an activity it does not), so `'0x11'`, `'1e1'` or a digit string past 2^53
+ * could silently land them on somebody else.
+ *
+ * ⚠ `data.member_id` is compared with `auth.member_id` when present: the application token
+ * authenticates `auth`, and an event whose two blocks name different portals is not one we
+ * understand. It is NOT required — the docs mark it mandatory, but a stricter parser than the
+ * sender would turn a harmless omission into a silently dead feature.
+ */
+export function parseSystemUserEvent(payload: unknown): SystemUserClaim {
+  if (eventCode(payload) !== B24_EVENT_SYSTEM_USER) {
+    throw new Error(`B24 event: expected ${B24_EVENT_SYSTEM_USER}, got "${eventCode(payload)}"`)
+  }
+  const auth = parseEventAuth(payload)
+  // Shape BEFORE anything else looks at the values: see `SYSTEM_USER_EVENT_SHAPE`. The messages name
+  // the field, never echo the value — it is attacker-controlled until the token check.
+  if (!SYSTEM_USER_EVENT_SHAPE.memberId.test(auth.member_id)) throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: malformed member_id`)
+  if (!SYSTEM_USER_EVENT_SHAPE.applicationToken.test(auth.application_token)) throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: malformed application_token`)
+  if (!SYSTEM_USER_EVENT_SHAPE.domain.test(auth.domain)) throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: malformed domain`)
+  const ts = (payload as { ts?: unknown }).ts
+  if (ts !== undefined && !(typeof ts === 'string' && SYSTEM_USER_EVENT_SHAPE.ts.test(ts))) {
+    throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: malformed ts`)
+  }
+  const data = (payload as { data?: unknown }).data
+  if (!data || typeof data !== 'object') throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: missing data`)
+  const d = data as Record<string, unknown>
+  const userId = portalUserId(d.user_id)
+  if (userId === null) throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: data.user_id is not a portal user id`)
+  if (d.member_id !== undefined && d.member_id !== auth.member_id) {
+    throw new Error(`B24 ${B24_EVENT_SYSTEM_USER}: data.member_id differs from auth.member_id`)
+  }
+  return { memberId: auth.member_id, userId, applicationToken: auth.application_token }
 }
 
 /** Whether the install is fully finished (`INSTALLED === 'Y'`). Events fire only

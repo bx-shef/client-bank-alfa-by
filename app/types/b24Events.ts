@@ -67,6 +67,22 @@ export type B24InstallEvent = B24Event<B24InstallEventData>
 export type B24UninstallEvent = B24Event<B24UninstallEventData>
 
 /**
+ * What we take from ONAPPUSERREADY — «the portal created (or re-activated) the app's system user».
+ *
+ * ⚠ The event's `data` also carries that user's LONG-LIVED authorization (access/refresh), and we
+ * deliberately take none of it: the system user is only the responsible of our smart-process
+ * elements, so its id is all we need. Keeping one more permanent key to the client's portal for
+ * something we do not use would be a secret in our database with no purpose.
+ */
+export interface SystemUserClaim {
+  memberId: string
+  /** The system user's id in the portal (`data.user_id`), a strictly positive integer. */
+  userId: number
+  /** The app token from `auth` — it authenticates this event, as it does every event but install. */
+  applicationToken: string
+}
+
+/**
  * Normalized per-portal credentials the backend persists at install time and
  * reads back to call the portal's REST API and to authenticate later events.
  * `issuedAtMs` pairs with `expiresIn` for refresh (see alfaOauth.isAccessTokenExpired

@@ -41,11 +41,39 @@ export const CREDENTIAL_JOB_RETENTION = {
   removeOnFail: { age: 86400, count: 200 }
 } as const
 
+/**
+ * Retries for ONAPPUSERREADY (the app's system user). Per the docs both events fire when the install
+ * finishes, and this one may be processed BEFORE the install is persisted — the install route first
+ * makes a network call to Bitrix's OAuth server (#162); the delivery order is neither documented nor
+ * measured — while the only thing that authenticates this event is the app token stored by that
+ * install. So the consumer waits for the install by retrying: 5+10+20+40+80 seconds ≈ two and a half
+ * minutes of patience, far above the gap that network call can plausibly open. The last attempt gives
+ * up QUIETLY (see `applySystemUserClaim`): an exhausted job would count as our failure.
+ *
+ * ⚠ The FIRST look is delayed too (`delay`): measured on a real BullMQ, a claim that beats the install
+ * failed its first attempt every time (the install landed ~0.8 s later), costing a retry WARN line and
+ * an error span per install for a retry that was expected all along (review of #783).
+ */
+export const SYSTEM_USER_RETRY_OPTS = {
+  attempts: 6,
+  delay: 3_000,
+  backoff: { type: 'exponential' as const, delay: 5_000 },
+  // Second line behind the shape checks of `parseSystemUserEvent`: this job may be queued before it
+  // is authenticated, and BullMQ refuses a payload over the limit instead of storing it. Sized to the
+  // LARGEST claim the parser admits (a 253-code-point domain of 4-byte characters ≈ 1.3 KB): 1024 B
+  // silently refused some claims the parser had just accepted (found in review of #783).
+  sizeLimit: 2048
+} as const
+
 /** True if the job was enqueued; false if the queue is disabled (no Redis). */
 export async function enqueueEvent(job: EventJob): Promise<boolean> {
   if (!queueEnabled()) return false
   // Drop the credential-bearing completed payload promptly (CREDENTIAL_JOB_RETENTION, #245).
-  await getQueue(Q_EVENTS).add(Q_EVENTS, job, { jobId: eventJobId(job), ...CREDENTIAL_JOB_RETENTION })
+  await getQueue(Q_EVENTS).add(Q_EVENTS, job, {
+    jobId: eventJobId(job),
+    ...CREDENTIAL_JOB_RETENTION,
+    ...(job.kind === 'ONAPPUSERREADY' ? SYSTEM_USER_RETRY_OPTS : {})
+  })
   return true
 }
 

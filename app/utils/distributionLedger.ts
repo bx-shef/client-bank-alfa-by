@@ -27,6 +27,7 @@ import type { AllocationTargetKind } from './allocation'
 import type { AllocationSource, DistributionEntry } from './manualAllocation'
 import { distributionSummary } from './manualAllocation'
 import { round2 } from './money'
+import { portalUserId } from './portalUser'
 import { DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS, buildUfFieldNameCamel, type SpRef } from '~/config/distributionSp'
 
 /** The field that links a distribution row to its parent PAYMENT carrier element: our OWN filterable
@@ -49,6 +50,26 @@ export interface DistributionRowInput {
   targetId: string
   source: AllocationSource
   marker: string
+  /** The row's responsible. The caller decides who (the app's system user, else nobody — see
+   *  `responsibleField`); the builder only carries the value. */
+  assignedById?: number
+}
+
+/**
+ * The responsible field of a new smart-process element — or nothing.
+ *
+ * Owner's decision 2026-09-29: elements go to the app's system user, and where there is none, to the
+ * installer. The installer is the ABSENCE of the field: the `crm.item.add` docs name the default —
+ * «the id of the user calling the method», and we call it with the installer's stored token. The
+ * caller (`withElementResponsible`, server) decides; this only renders the value.
+ *
+ * ⚠ The same strict parser as the activity's responsible (`portalUserId`): whether the portal
+ * validates this field on an element is not measured (on an activity it does not — box code), so a
+ * malformed value must never reach the portal — it could silently land the element on somebody else.
+ */
+function responsibleField(assignedById: unknown): { assignedById?: number } {
+  const id = portalUserId(assignedById)
+  return id === null ? {} : { assignedById: id }
 }
 
 /** Build the `crm.item.add` call that creates one distribution ledger row. `isManualOpportunity:'Y'`
@@ -73,7 +94,8 @@ export function buildDistributionRowAddCall(input: DistributionRowInput): { meth
         [uf(DISTRIBUTION_SP_FIELDS.targetId.postfix)]: input.targetId,
         [uf(DISTRIBUTION_SP_FIELDS.source.postfix)]: input.source,
         [uf(DISTRIBUTION_SP_FIELDS.status.postfix)]: 'active',
-        [uf(DISTRIBUTION_SP_FIELDS.marker.postfix)]: input.marker
+        [uf(DISTRIBUTION_SP_FIELDS.marker.postfix)]: input.marker,
+        ...responsibleField(input.assignedById)
       }
     }
   }
@@ -339,6 +361,9 @@ export interface PaymentElementInput {
    * то есть ровно там, где человек ищет платёж глазами, и не говорит о платеже НИЧЕГО.
    */
   title?: string
+  /** The element's responsible — the caller decides (see `responsibleField`). Set ONLY on
+   *  creation: an element found by its marker is left alone. */
+  assignedById?: number
 }
 
 /** The statement facts carried onto the payment element so the SP reads as a REGISTRY (#575). */
@@ -377,6 +402,7 @@ export function buildPaymentElementAddCall(paymentSp: SpRef, input: PaymentEleme
   // Link the payer company only when matched (a positive integer id).
   const companyId = Number(input.companyId)
   if (input.companyId && Number.isInteger(companyId) && companyId > 0) fields.companyId = companyId
+  Object.assign(fields, responsibleField(input.assignedById))
   return {
     method: 'crm.item.add',
     params: { entityTypeId: paymentSp.entityTypeId, fields }

@@ -25,8 +25,9 @@ import type { PortalCurrencyFormats } from '~/utils/currencyFormat'
 import { dedupKey } from '~/utils/statement'
 import {
   ACTIVITY_ORIGIN, CRM_OWNER_TYPE_COMPANY, buildActivityTitle,
-  formatIsoDate, formatMoney, neutralizeBb, portalUserId, toPortalDeadline, type CrmCompanyRef
+  formatIsoDate, formatMoney, neutralizeBb, toPortalDeadline, type CrmCompanyRef
 } from '~/utils/activity'
+import { portalUserId } from '~/utils/portalUser'
 
 /** REST method that creates a universal timeline activity. */
 export const TODO_ACTIVITY_ADD_METHOD = 'crm.activity.todo.add'

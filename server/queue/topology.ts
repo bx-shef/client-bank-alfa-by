@@ -75,11 +75,18 @@ export interface EventJobCredentials {
 export interface EventJob {
   memberId: string
   domain: string
-  kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL'
+  kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL' | 'ONAPPUSERREADY'
   /** Event timestamp from B24 (deduplicates redelivery of the same event). */
   ts: string
   /** Present on ONAPPINSTALL — the portal credentials the consumer persists. */
   credentials?: EventJobCredentials
+  /**
+   * Present on ONAPPUSERREADY — the app's system user to record (see server/utils/systemUser.ts). The
+   * consumer ALWAYS verifies `appTokenHash` against the token stored at write time (the install may
+   * not be persisted yet, or an uninstall + reinstall may land in between). A HASH, not the token: the
+   * application token authenticates uninstalls and has no business in Redis.
+   */
+  systemUser?: { userId: number, appTokenHash: string }
 }
 
 /** Pull one statement window for a portal/account (the cron fans these out). */
@@ -247,7 +254,11 @@ function joinId(parts: (string | number)[]): string {
 }
 
 export function eventJobId(job: EventJob): string {
-  return joinId(['evt', job.memberId, job.kind, job.ts])
+  const base = ['evt', job.memberId, job.kind, job.ts]
+  // ONAPPUSERREADY may be queued BEFORE it is authenticated (the install is not persisted yet), so a
+  // forgery with the same member_id and ts must not occupy the id of the genuine claim — BullMQ would
+  // silently keep the first one. The token hash tells them apart (review of #783).
+  return joinId(job.kind === 'ONAPPUSERREADY' && job.systemUser ? [...base, job.systemUser.appTokenHash.slice(0, 16)] : base)
 }
 
 export function fetchJobId(job: FetchJob): string {

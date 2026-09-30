@@ -17,7 +17,7 @@
 // `isMyCompany='Y'` (confirmed live), not a separate entity. `readCompanyResponsible` then reads
 // the responsible of whichever company the activity goes to — the activity is put on that person.
 
-import { portalUserId } from '../../app/utils/activity'
+import { portalUserId } from '../../app/utils/portalUser'
 import { portalErrorCode } from './portalError'
 import { useServerLogger } from './serverLogger'
 

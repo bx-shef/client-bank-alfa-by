@@ -13,16 +13,19 @@ import type { PortalCredentials } from '../../app/types/b24Events'
 import {
   appTokenVerdict,
   B24_EVENT_INSTALL,
+  B24_EVENT_SYSTEM_USER,
   B24_EVENT_UNINSTALL,
   eventCode,
   extractPortalCredentials,
   parseInstallEvent,
+  parseSystemUserEvent,
   parseUninstallEvent
 } from '../../app/utils/b24Events'
 import { B24_DELETION_EVENTS } from '../../app/config/b24'
 import type { DeletionJob, EventJob } from '../queue/topology'
 import type { PortalToken } from './tokenStore'
 import type { InstallMemberResult } from './verifyInstallMember'
+import { applicationTokenHash } from './appTokenHash'
 
 /** Raw deletion-entity fields extracted at ingestion (classification is deferred to the consumer,
  *  which has the portal's SP config). `id` is a validated digit string. */
@@ -49,6 +52,10 @@ export type B24EventAction
   = | { type: 'register', memberId: string, credentials: PortalCredentials }
     | { type: 'unregister', memberId: string }
     | { type: 'reconcile-deletion', memberId: string, deletion: DeletionEntityFields }
+    /** ONAPPUSERREADY: record the app's system user. The consumer ALWAYS re-verifies `appTokenHash`
+     *  against the token stored at write time; `verified` only says whether the route could check it
+     *  already (install persisted) — which decides the cap and the Redis-down fallback. */
+    | { type: 'system-user', memberId: string, userId: number, appTokenHash: string, verified: boolean }
 
 /** What the route should return: an HTTP status, a small JSON body, and (on accept)
  *  the action to enqueue. No `action` ⇒ nothing to persist (denied / ignored). */
@@ -144,6 +151,43 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
     }
   }
 
+  // ONAPPUSERREADY — the app's system user (owner's decision 2026-09-29: smart-process elements go
+  // on it). Authenticated like every event but install: by the stored application token.
+  if (code === B24_EVENT_SYSTEM_USER) {
+    let claim
+    try {
+      claim = parseSystemUserEvent(payload)
+    } catch (e) {
+      // The parser's messages name the FIELD and never echo its value (see `parseSystemUserEvent`),
+      // so the reason is safe to return — and without it a rejected legitimate event looks like any
+      // other 400 (review of #783).
+      return { status: 400, body: { error: `malformed ${B24_EVENT_SYSTEM_USER}`, reason: e instanceof Error ? e.message : '' } }
+    }
+    // What travels to the queue is a HASH of the token, never the token itself; the consumer
+    // re-verifies it against the token stored at WRITE time (an uninstall + instant reinstall may land
+    // in between — trust the row as it is then, not as it was on arrival).
+    const appTokenHash = applicationTokenHash(claim.applicationToken)
+    const storedToken = await deps.loadStoredToken(claim.memberId)
+    if (storedToken) {
+      const verdict = appTokenVerdict({ isInstall: false, incoming: claim.applicationToken, storedToken })
+      if (verdict !== 'accept') return deny(verdict)
+      return {
+        status: 200,
+        body: { ok: true, event: B24_EVENT_SYSTEM_USER, memberId: claim.memberId },
+        action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId, appTokenHash, verified: true }
+      }
+    }
+    // ⚠ No stored token is NOT a denial here, unlike uninstall. Per the docs both events fire when the
+    // install finishes, and the install is persisted only after a network round-trip to Bitrix's
+    // OAuth server (#162) — so this event may arrive first (the order is not measured). Online events
+    // are not resent; refusing would lose the system user for good. The consumer waits and verifies.
+    return {
+      status: 200,
+      body: { ok: true, event: B24_EVENT_SYSTEM_USER, memberId: claim.memberId, deferred: true },
+      action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId, appTokenHash, verified: false }
+    }
+  }
+
   // An event we don't subscribe to — acknowledge so B24 stops retrying.
   return { status: 200, body: { ok: true, ignored: code } }
 }
@@ -161,6 +205,12 @@ export interface B24RequestDeps extends B24EventDeps {
   saveCredentials: (token: PortalToken, eventTs: number) => Promise<void>
   /** Fallback: remove a portal synchronously (queue unavailable). Records the ordering tombstone (#77). */
   deletePortal: (memberId: string, eventTs: number) => Promise<void>
+  /** Fallback: record a VERIFIED system user synchronously (queue unavailable). UPDATE-only. */
+  saveSystemUser: (memberId: string, userId: number) => Promise<void>
+  /** Admit one more UNVERIFIED system-user claim into the queue (a service-wide per-minute cap,
+   *  `admitDeferredClaim`). The only path where an unauthenticated event reaches the queue — see
+   *  `MAX_DEFERRED_CLAIMS_PER_MINUTE`. May throw (Redis down) — treated as «not admitted». */
+  admitDeferredClaim: () => Promise<boolean>
   /** AES-GCM encrypt for the refresh token carried in the queued job (never plain in Redis). */
   encrypt: (plain: string) => string
   /** Current epoch ms — injected so tests are deterministic. */
@@ -259,6 +309,45 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
       // Redis down — no sync fallback (recoverable via «пересчитать»); ACK the webhook anyway.
     }
     return { ...result, outcome: enq ? 'queued' : 'none' }
+  }
+
+  // ONAPPUSERREADY: enqueue the claim; the consumer (single writer) verifies and records it. Queue
+  // unavailable: a claim the route verified is written right here (UPDATE-only — nothing to
+  // resurrect), an unverified one cannot be checked later by anybody and is dropped. The loss is soft
+  // by design: elements stay on the installer, as on a portal that never sent the event.
+  if (action.type === 'system-user') {
+    if (!action.verified) {
+      // UNverified claim — capped, or a flood of forgeries with made-up portals would become a flood
+      // of jobs in the very queue that carries installs. Refused ⇒ lost softly (installer stays).
+      let admitted = false
+      try {
+        admitted = await deps.admitDeferredClaim()
+      } catch {
+        // Redis down — the claim could not be queued anyway.
+      }
+      if (!admitted) {
+        return { status: 503, body: { error: 'system user: deferred verification refused' }, outcome: 'none' }
+      }
+    }
+    const sysJob: EventJob = {
+      memberId: action.memberId,
+      domain,
+      kind: 'ONAPPUSERREADY',
+      ts,
+      systemUser: { userId: action.userId, appTokenHash: action.appTokenHash }
+    }
+    let enq = false
+    try {
+      enq = await deps.enqueue(sysJob)
+    } catch {
+      // Redis threw — same as a disabled queue.
+    }
+    if (enq) return { ...result, outcome: 'queued' }
+    if (!action.verified) {
+      return { status: 503, body: { error: 'system user: install not persisted yet and queue unavailable' }, outcome: 'none' }
+    }
+    await deps.saveSystemUser(action.memberId, action.userId)
+    return { ...result, outcome: 'sync-fallback' }
   }
 
   const expiresAt = action.type === 'register' ? expiresAtFrom(action.credentials.expiresIn, deps.now()) : 0

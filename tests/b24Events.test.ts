@@ -9,6 +9,7 @@ import {
   isSafeClientEndpoint,
   parseBracketForm,
   parseInstallEvent,
+  parseSystemUserEvent,
   parseUninstallEvent,
   safeEqual,
   verifyApplicationToken
@@ -167,6 +168,142 @@ describe('parseUninstallEvent', () => {
       auth: { domain: 'd', member_id: 'm', application_token: 't' }
     })
     expect(event.data).toEqual({})
+  })
+})
+
+/** A system-user payload whose fields a test may overwrite. */
+type Corruptible = { auth: Record<string, unknown>, data: Record<string, unknown> } & Record<string, unknown>
+
+describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
+  // Shape from the official doc (common/events/on-app-user-ready) as it arrives on the wire:
+  // form-encoded, so every leaf is a string.
+  const wire = 'event=ONAPPUSERREADY&data[access_token]=SYS_A&data[refresh_token]=SYS_R&data[expires_in]=3600'
+    + '&data[member_id]=a223c6b3710f85df22e9377d6c4f7553&data[user_id]=512&data[status]=S'
+    + '&ts=1756890123&auth[domain]=some-domain.bitrix24.ru&auth[member_id]=a223c6b3710f85df22e9377d6c4f7553'
+    + `&auth[user_id]=1&auth[application_token]=${APP_TOKEN}&auth[access_token]=INST_A`
+  const payload = () => parseBracketForm(wire)
+
+  it('takes the system user id from data and the app token from auth', () => {
+    expect(parseSystemUserEvent(payload())).toEqual({
+      memberId: 'a223c6b3710f85df22e9377d6c4f7553',
+      userId: 512,
+      applicationToken: APP_TOKEN
+    })
+  })
+
+  it('never returns the long-lived authorization of the system user', () => {
+    // We need the id, not one more permanent key to the client's portal.
+    const text = JSON.stringify(parseSystemUserEvent(payload()))
+    expect(text).not.toContain('SYS_A')
+    expect(text).not.toContain('SYS_R')
+  })
+
+  it('takes data.user_id, not auth.user_id (that one is the installer)', () => {
+    expect(parseSystemUserEvent(payload()).userId).toBe(512)
+  })
+
+  it.each([['0'], ['-5'], ['0x11'], ['1e1'], ['9007199254740993'], ['abc'], ['']])(
+    'rejects a user id the portal would not have sent: %j', (raw) => {
+      // It becomes the responsible of CRM elements, and whether the portal validates that field
+      // there is not measured: '0x11' would be user 17, a digit string past 2^53 somebody else.
+      const p = payload() as { data: Record<string, unknown> }
+      p.data.user_id = raw
+      expect(() => parseSystemUserEvent(p)).toThrow(/user_id/)
+    })
+
+  // The only event whose fields may reach the queue before authentication: a forged request must not
+  // park megabytes in Redis nor forge log lines with a newline (review of #783).
+  it.each([
+    ['member_id', 'x'.repeat(65)],
+    ['member_id', 'abc\n[auth] ERROR: fake'],
+    ['member_id', 'a b'],
+    ['application_token', 't'.repeat(129)],
+    ['application_token', 'tok\r\nX'],
+    ['domain', 'evil.example\n[auth] ERROR: fake'],
+    ['domain', 'a b'],
+    ['domain', 'a'.repeat(254)],
+    // Control characters beyond whitespace — what `\p{Cc}` is there for: an ANSI escape could repaint
+    // a terminal reading the log, NUL/DEL/C1 are no part of any host name.
+    ['domain', 'host\u001b[31mred'],
+    ['domain', 'a\u0000b'],
+    ['domain', 'a\u007fb'],
+    ['domain', 'a\u0085b']
+  ])('rejects a malformed auth.%s before anything looks at it', (field, value) => {
+    const p = payload() as { auth: Record<string, unknown> }
+    p.auth[field] = value
+    expect(() => parseSystemUserEvent(p)).toThrow(new RegExp(`malformed ${field}`))
+  })
+
+  it.each([['1756890123abc'], ['1'.repeat(13)], ['-1']])('rejects a malformed ts %j', (ts) => {
+    const p = payload() as Record<string, unknown>
+    p.ts = ts
+    expect(() => parseSystemUserEvent(p)).toThrow(/malformed ts/)
+  })
+
+  it('error messages name the field and never echo the attacker-controlled value', () => {
+    const p = payload() as { auth: Record<string, unknown> }
+    p.auth.member_id = 'SECRET-LOOKING-VALUE\n'
+    expect(() => parseSystemUserEvent(p)).toThrow(/^(?!.*SECRET-LOOKING-VALUE).*$/s)
+  })
+
+  // Since the handler returns the parser's message to the sender (`reason` of the 400), no rejection
+  // may echo a value from the unauthenticated request — for EVERY field, not only member_id.
+  it.each([
+    ['auth.application_token', (p: Corruptible) => { p.auth.application_token = 'tok\r\nLEAKME' }],
+    ['auth.domain', (p: Corruptible) => { p.auth.domain = 'evil.example\nLEAKME' }],
+    ['ts', (p: Corruptible) => { p.ts = 'LEAKME' }],
+    ['data.member_id', (p: Corruptible) => { p.data.member_id = 'LEAKME' }]
+  ])('a rejection on %s does not echo the value', (_field, corrupt) => {
+    const p = payload() as Corruptible
+    corrupt(p)
+    let message = ''
+    try {
+      parseSystemUserEvent(p)
+    } catch (e) {
+      message = (e as Error).message
+    }
+    expect(message).not.toBe('') // rejected at all
+    expect(message).not.toContain('LEAKME')
+  })
+
+  it.each([
+    ['portal.example.by:8443'], // коробка с портом
+    ['crm_portal.local'], // подчёркивание во внутреннем имени (находка ревью #783)
+    ['crm.компания.рф'], // кириллический адрес коробки, если портал пришлёт его как есть
+    ['[2001:db8::1]:8080'] // IPv6-литерал
+  ])('accepts the host shapes real portals send: %s', (domain) => {
+    // The domain is only bounded: nothing on this path calls the portal by it, and a strict host
+    // pattern silently lost the system user of a legitimate box.
+    const p = payload() as { auth: Record<string, unknown> }
+    p.auth.domain = domain
+    expect(parseSystemUserEvent(p).userId).toBe(512)
+  })
+
+  it('rejects an event whose data and auth name different portals', () => {
+    const p = payload() as { data: Record<string, unknown> }
+    p.data.member_id = 'someone-else'
+    expect(() => parseSystemUserEvent(p)).toThrow(/member_id/)
+  })
+
+  it('accepts an event without data.member_id — auth is what the app token authenticates', () => {
+    const p = payload() as { data: Record<string, unknown> }
+    delete p.data.member_id
+    expect(parseSystemUserEvent(p).memberId).toBe('a223c6b3710f85df22e9377d6c4f7553')
+  })
+
+  it('rejects a missing data block, a missing app token and a different event', () => {
+    const noData = payload() as Record<string, unknown>
+    delete noData.data
+    // Named as such — a bare /data/ would also match the «data.user_id …» message.
+    expect(() => parseSystemUserEvent(noData)).toThrow(/missing data/)
+    const noToken = payload() as { auth: Record<string, unknown> }
+    delete noToken.auth.application_token
+    expect(() => parseSystemUserEvent(noToken)).toThrow()
+    expect(() => parseSystemUserEvent(installPayload)).toThrow(/expected ONAPPUSERREADY, got "ONAPPINSTALL"/)
+    // Rejected by its CODE even when the body is a perfectly valid system-user event.
+    const otherCode = payload() as Record<string, unknown>
+    otherCode.event = 'ONAPPINSTALL'
+    expect(() => parseSystemUserEvent(otherCode)).toThrow(/expected ONAPPUSERREADY, got "ONAPPINSTALL"/)
   })
 })
 

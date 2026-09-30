@@ -206,6 +206,112 @@ describe('install.vue — inside a B24 frame', () => {
     expect(wrapper.text()).not.toContain('Ошибка установки')
   })
 
+  // Служебный пользователь приложения (решение владельца 2026-09-29): его id приходит только
+  // событием ONAPPUSERREADY, а подписка на него — отдельный вызов, отказ которого установку не роняет.
+  type BindArg = { method?: string, params?: Record<string, unknown> }
+  const systemUserBinds = () => callSpy.mock.calls
+    .map(c => (c as unknown[])[0] as BindArg)
+    .filter(a => a?.method === 'event.bind' && a.params?.event === 'ONAPPUSERREADY')
+
+  it('подписывает ONAPPUSERREADY на обработчик backend — отдельным вызовом и ДО installFinish', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    const binds = systemUserBinds()
+    expect(binds).toHaveLength(1)
+    expect(String(binds[0]!.params!.handler)).toMatch(/^https?:\/\/.+\/api\/b24\/events$/)
+    const index = callSpy.mock.calls.findIndex(c => ((c as unknown[])[0] as BindArg)?.params?.event === 'ONAPPUSERREADY')
+    expect(callSpy.mock.invocationCallOrder[index]!).toBeLessThan(finishSpy.mock.invocationCallOrder[0]!)
+    // И НЕ в общем батче: там отказ валит установку, а здесь он штатный на портале без события.
+    const inBatch = batchSpy.mock.calls.some(c => JSON.stringify(c).includes('ONAPPUSERREADY'))
+    expect(inBatch).toBe(false)
+  })
+
+  /** Ответ портала на подписку ONAPPUSERREADY: отказ с кодом `code`, остальные вызовы — успех. */
+  const refuseSystemUserBind = (code: string) => callSpy.mockImplementation(async (arg?: unknown) => {
+    const bad = (arg as BindArg)?.params?.event === 'ONAPPUSERREADY'
+    return {
+      isSuccess: !bad,
+      getData: () => ({ result: !bad }),
+      getErrorMessages: () => (bad ? ['Описание на языке портала'] : []),
+      getErrors: () => (bad ? [Object.assign(new Error('Описание на языке портала'), { code })] : [])[Symbol.iterator]()
+    }
+  })
+
+  it('портал не знает события (ERROR_EVENT_NOT_FOUND) — установка ВСЁ РАВНО завершается', async () => {
+    refuseSystemUserBind('ERROR_EVENT_NOT_FOUND')
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Ошибка установки')
+    expect(wrapper.text()).toContain('недоступно на этом портале')
+  })
+
+  it('отказ по ДРУГОЙ причине не выдаётся за «недоступно на этом портале» (находка ревью #783)', async () => {
+    // Сеть, права, сбой портала ничего не говорят о том, знает ли портал событие.
+    refuseSystemUserBind('ACCESS_DENIED')
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('недоступно на этом портале')
+    expect(wrapper.text()).toContain('подписаться не удалось')
+  })
+
+  // ⚠ Настоящий SDK возвращает неуспешный результат только для своих «мягких» кодов, а всё остальное —
+  // и ERROR_EVENT_NOT_FOUND тоже — БРОСАЕТ (`abstract-http.mjs`). То есть на живом портале текст
+  // приходит из ветки `catch`, и тесты выше, мокающие неуспешный результат, её не проходят (QA-ревью #783).
+  const throwOnSystemUserBind = (error: unknown) => callSpy.mockImplementation(async (arg?: unknown) => {
+    if ((arg as BindArg)?.params?.event === 'ONAPPUSERREADY') throw error
+    return { isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] }
+  })
+
+  it('ERROR_EVENT_NOT_FOUND БРОШЕН ошибкой SDK — «недоступно на этом портале», установка завершается', async () => {
+    throwOnSystemUserBind(Object.assign(new Error('Описание на языке портала'), { code: 'ERROR_EVENT_NOT_FOUND' }))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('недоступно на этом портале')
+    expect(wrapper.text()).not.toContain('подписаться не удалось')
+  })
+
+  it('брошен ДРУГОЙ код — «подписаться не удалось», а не «недоступно на этом портале»', async () => {
+    throwOnSystemUserBind(Object.assign(new Error('Доступ запрещён'), { code: 'ACCESS_DENIED' }))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('подписаться не удалось')
+    expect(wrapper.text()).not.toContain('недоступно на этом портале')
+  })
+
+  it('ЧУЖОЙ обработчик события не снимается — свой ставится рядом (находка ревью #783)', async () => {
+    // Чужим может оказаться автоматический обработчик портала; снятие ничего не даёт, а лишняя
+    // доставка безвредна.
+    batchSpy.mockImplementation(async () => ({
+      isSuccess: true,
+      getData: () => ({ scope: ['crm'], eventList: [{ event: 'ONAPPUSERREADY', handler: 'https://other.example/install' }] }),
+      getErrorMessages: () => [] as string[]
+    }))
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(systemUserBinds()).toHaveLength(1)
+    const unbound = [...batchSpy.mock.calls, ...callSpy.mock.calls].some(c => JSON.stringify(c).includes('event.unbind') && JSON.stringify(c).includes('ONAPPUSERREADY'))
+    expect(unbound).toBe(false)
+  })
+
+  it('уже подписано на наш обработчик — повторно не подписываем', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    const handler = String(systemUserBinds()[0]!.params!.handler)
+    callSpy.mockClear()
+    batchSpy.mockImplementation(async () => ({
+      isSuccess: true,
+      getData: () => ({ scope: ['crm'], eventList: [{ event: 'ONAPPUSERREADY', handler }] }),
+      getErrorMessages: () => [] as string[]
+    }))
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(systemUserBinds()).toHaveLength(0)
+  })
+
   it('surfaces a retryable error and does NOT finish when event.bind fails', async () => {
     // Init batch (app.info/scope/event.get) succeeds; the bind batch resolves as
     // a failed Result — install must not finish with events unbound.

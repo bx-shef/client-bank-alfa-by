@@ -17,7 +17,7 @@
 // a test with shared element state pins that order (an earlier version of that test used two
 // independent fakes and passed against the broken order — measured).
 
-import { ensurePaymentElement, extractListItems } from './distributionLedgerWrite'
+import { ensurePaymentElement, extractListItems, type ResponsibleResolver } from './distributionLedgerWrite'
 import { buildRegistryFillCall, buildRegistryProbeCall } from '../../app/utils/distributionLedger'
 import { dedupKey } from '../../app/utils/statement'
 import { BANK_LABELS } from '../../app/utils/bankLabels'
@@ -77,7 +77,10 @@ export async function writePaymentRegistryViaRest(
   companyId: string | null,
   provider: BankProviderId,
   paymentSp: SpRef,
-  call: RestCall
+  call: RestCall,
+  /** Ответственный НОВОГО элемента — служебный пользователь приложения, иначе установивший
+   *  (решение владельца 2026-09-29); спрашивается только при создании. Найденному — не меняем. */
+  responsible?: ResponsibleResolver
 ): Promise<string> {
   const registry = buildRegistryFields(item, provider)
   const { id, created } = await ensurePaymentElement(paymentSp, {
@@ -92,7 +95,7 @@ export async function writePaymentRegistryViaRest(
     title: neutralizeBb(buildActivityTitle(item)),
     ...(companyId ? { companyId } : {}),
     registry
-  }, call)
+  }, call, responsible)
   if (!created) {
     const fill = buildRegistryFillCall(paymentSp, id, registry)
     if (fill) await call(fill.method, fill.params)
@@ -131,7 +134,9 @@ export async function backfillPaymentRegistryViaRest(
   companyId: string | null,
   provider: BankProviderId,
   paymentSp: SpRef,
-  call: RestCall
+  call: RestCall,
+  /** Ответственный — только на ветке СОЗДАНИЯ; дозаполнение существующего элемента его не спрашивает. */
+  responsible?: ResponsibleResolver
 ): Promise<'filled' | 'already' | 'created'> {
   const marker = dedupKey(item)
   // ⚠ Пустой маркер дал бы фильтр без условий, то есть перечисление ВСЕГО смарт-процесса (тот же
@@ -143,7 +148,7 @@ export async function backfillPaymentRegistryViaRest(
   const found = extractListItems(res)[0]
   // Элемента нет — создаём полноценно (см. ⚠ выше): это и есть портал, где СП появился позже.
   if (!found) {
-    await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+    await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call, responsible)
     return 'created'
   }
   const indicator = buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.direction.postfix)

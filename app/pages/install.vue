@@ -5,6 +5,7 @@ import {
   APP_SLIDER_PLACE_IMPORT, APP_URI_HANDLER_PATH, APP_URI_PLACE_PARAM,
   B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER
 } from '~/config/b24'
+import { B24_EVENT_SYSTEM_USER } from '~/utils/b24Events'
 import { buildAppUriLink } from '~/utils/appUriLink'
 import { useAppCode } from '~/composables/useAppCode'
 import { buildPlacementBindCall, isPlacementAlreadyBound } from '~/utils/b24PlacementRegister'
@@ -70,6 +71,10 @@ const checkingBackend = ref(false)
 const triggerRegistered = ref('')
 // Best-effort chat-bot registration outcome (#496), same shape as the trigger above.
 const botRegistered = ref('')
+/** Подписка на событие о служебном пользователе (`ONAPPUSERREADY`): '' — не пытались, 'ok',
+ *  'уже подписано' или текст ошибки. ⚠ Это подписка, а не сам служебный пользователь: событие
+ *  придёт после `installFinish`, и дошло ли оно, видно в логе backend, а не здесь. */
+const systemUserEvent = ref('')
 /** Регистрация точки `REST_APP_URI` (#19): '' — не пытались, 'ok', 'уже зарегистрирован' или текст
  *  ошибки. ⚠ «Уже зарегистрирован» — ШТАТНЫЙ исход переустановки, а не отказ: у точки одна
  *  регистрация, и повтор `placement.bind` всегда отвечает `ERROR_PLACEMENT_MAX_COUNT`. */
@@ -135,6 +140,8 @@ const diagnostics = computed(() => {
     smartProcess: spProvisioned.value,
     // Best-effort chat-bot registration (#496): '' hides the row.
     bot: botRegistered.value,
+    // Подписка на событие о служебном пользователе — пустое значение прячет строку, как у соседних.
+    systemUserEvent: systemUserEvent.value,
     // Ссылка на экраны приложения (#19). Обе строки прячутся пустым значением, как соседние.
     appUri: placementBound.value,
     appImportLink: appImportLink.value
@@ -198,6 +205,70 @@ async function bindEvents(): Promise<void> {
   if (bind.length) {
     const res = await $b24.actions.v2.batch.make({ calls: bind })
     if (!res.isSuccess) throw new Error(`event.bind не удался: ${res.getErrorMessages().join('; ')}`)
+  }
+}
+
+/** Код, которым портал отвечает на незнакомое событие (список ошибок `event.bind`). Различаем по
+ *  коду, а не по тексту: описание приходит на языке портала. */
+const EVENT_NOT_FOUND = 'ERROR_EVENT_NOT_FOUND'
+
+/** Коды ошибок ответа портала: `getErrors()` отдаёт ошибки с полем `code`, а `getErrorMessages()` —
+ *  только описания. Читаем структурно и с защитой: у ответа может не быть метода. */
+function errorCodes(res: { getErrors?: () => Iterable<Error> }): string[] {
+  try {
+    return [...(res.getErrors?.() ?? [])].map(e => String((e as { code?: unknown }).code ?? ''))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Что написать в диагностике об отказе подписки. Это не ошибка установки, поэтому слова «ошибка»
+ * нет (оно пугало бы на исправной установке), зато названо, к чему отказ ведёт.
+ *
+ * ⚠ «Недоступно на этом портале» — ТОЛЬКО на код незнакомого события. Любой другой отказ (сеть,
+ * права, сбой портала) ничего не говорит о самом портале, и утверждать про него обратное значило бы
+ * соврать в диагностике (находка ревью #783).
+ */
+function systemUserUnavailable(codes: string[], portalAnswer: string): string {
+  return codes.includes(EVENT_NOT_FOUND)
+    ? `недоступно на этом портале — элементы будут на установившем (ответ портала: ${portalAnswer})`
+    : `подписаться не удалось — элементы будут на установившем, пока подписки нет (ответ портала: ${portalAnswer})`
+}
+
+/**
+ * Подписка на событие о служебном пользователе приложения (`ONAPPUSERREADY`): на него ставятся
+ * элементы смарт-процессов (решение владельца 2026-09-29), а узнать его id можно только из события.
+ *
+ * ⚠ BEST-EFFORT и ОТДЕЛЬНО от `bindEvents`: там отказ роняет установку (без `ONAPPINSTALL` сервер
+ * портала не узнает), здесь отказ ожидаем — незнакомое порталу событие по документации `event.bind`
+ * даёт `ERROR_EVENT_NOT_FOUND` (не замерено), и ронять из-за этого установку нельзя: элементы просто
+ * останутся на установившем, как и договорено.
+ *
+ * ⚠ Подписываемся сами, хотя портал обещает обработчик автоматически: куда идёт автоматический, не
+ * сказано, и если на адрес установки, то есть на эту самую страницу, событие было бы «доставлено» без
+ * следа. Подробнее — `docs/B24_EVENTS.md`, «Служебный пользователь приложения».
+ *
+ * ⚠ ЧУЖОЙ обработчик этого события НЕ снимаем, в отличие от `bindEvents` (находка ревью #783): им
+ * может оказаться тот самый автоматический, которого документация обещает переносить вместе с
+ * конфигурацией приложения, а снятие ничего не даёт — лишняя доставка безвредна (задача с тем же id
+ * не ставится второй раз, запись — UPDATE того же значения).
+ */
+async function bindSystemUserEvent(): Promise<void> {
+  const { bind } = buildEventBindCalls(initData.value.eventList ?? [], [B24_EVENT_SYSTEM_USER], eventHandlerUrl.value)
+  try {
+    const $b24 = b24Instance.getOrThrow()
+    const call = bind[0]
+    if (!call) {
+      systemUserEvent.value = 'уже подписано'
+      return
+    }
+    const res = await $b24.actions.v2.call.make({ method: call.method, params: call.params })
+    systemUserEvent.value = res.isSuccess ? 'ok' : systemUserUnavailable(errorCodes(res), res.getErrorMessages().join('; '))
+  } catch (error: unknown) {
+    log.warning('подписка на событие о служебном пользователе не удалась', { error: String(error) })
+    const code = String((error as { code?: unknown } | null)?.code ?? '')
+    systemUserEvent.value = systemUserUnavailable([code], error instanceof Error ? error.message : String(error))
   }
 }
 
@@ -370,6 +441,10 @@ async function runInstall() {
     caption.value = 'Регистрация обработчика событий…'
     await bindEvents()
 
+    // Служебный пользователь приложения — ДО `installFinish`: событие о нём портал шлёт именно по
+    // завершении установки, и подписка, сделанная позже, его не получит. Best-effort.
+    await bindSystemUserEvent()
+
     // Register the app's automation trigger (best-effort, never blocks — see registerTrigger()).
     caption.value = 'Регистрация триггера автоматизации…'
     await registerTrigger()
@@ -536,6 +611,10 @@ onMounted(runInstall)
                 <template v-if="diagnostics.trigger">
                   <span class="text-(--ui-color-base-3)">Триггер автоматизации:</span>
                   <span class="break-all">{{ diagnostics.trigger }}</span>
+                </template>
+                <template v-if="diagnostics.systemUserEvent">
+                  <span class="text-(--ui-color-base-3)">Событие о служебном пользователе:</span>
+                  <span class="break-all">{{ diagnostics.systemUserEvent }}</span>
                 </template>
                 <template v-if="diagnostics.smartProcess">
                   <span class="text-(--ui-color-base-3)">Смарт-процессы:</span>

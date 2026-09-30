@@ -27,6 +27,7 @@ import { parseConfiguredEntityTypeId, SMART_ENTITY_CONFIG_KEY } from '../utils/i
 import { distributionSpRef as readDistributionSpRef, paymentSpRef as readPaymentSpRef, type SpRef } from '../../app/config/distributionSp'
 import type { CrmSyncJob, EventJob, FetchJob, ParseJob } from './topology'
 import type { TriggerOutcome } from '../utils/applyTriggerDep'
+import type { SystemUserClaimJob, SystemUserOutcome } from '../utils/systemUser'
 
 /** Cap on how many recognized intents of ONE operation are sent to the REST resolver
  *  (#191). The payment purpose is payer-controlled, and recognition dedupes only by
@@ -280,6 +281,10 @@ export interface HandlerDeps {
   getActivityId: (memberId: string, dedupKey: string) => Promise<string | null>
   /** Register a portal on ONAPPINSTALL — decrypt the refresh blob, upsert the token row. */
   savePortal: (job: EventJob) => Promise<void>
+  /** ONAPPUSERREADY — verify the claim against the token stored NOW and record the app's system user
+   *  (`applySystemUserClaim`). Throws `SystemUserPendingError` to retry while the install is not
+   *  persisted yet — except on the final attempt, where it gives up quietly. */
+  saveSystemUser: (claim: SystemUserClaimJob, opts: { finalAttempt: boolean }) => Promise<SystemUserOutcome>
   /** Remove EVERYTHING for a portal on ONAPPUNINSTALL (uninstall always purges).
    *  `eventTs` (B24 event timestamp) records an ordering tombstone (#77) so a stale
    *  register can't resurrect the portal after this uninstall.
@@ -296,11 +301,25 @@ export interface HandlerDeps {
 
 /** Apply a verified B24 event to the store — the consumer is the SINGLE writer
  *  (the webhook only verifies + enqueues). Uninstall removes everything for the
- *  portal (always). Install registers it (persists credentials). */
-export async function handleEventJob(job: EventJob, deps: HandlerDeps): Promise<{ kind: string, cleaned: boolean, registered: boolean }> {
+ *  portal (always). Install registers it (persists credentials). ONAPPUSERREADY records the app's
+ *  system user. `finalAttempt` matters only to the last one — see `saveSystemUser`. */
+export async function handleEventJob(
+  job: EventJob,
+  deps: HandlerDeps,
+  ctx: { finalAttempt?: boolean } = {}
+): Promise<{ kind: string, cleaned: boolean, registered: boolean, systemUser?: SystemUserOutcome }> {
   if (job.kind === 'ONAPPUNINSTALL') {
     await deps.deletePortal(job.memberId, Number(job.ts) || 0, 'uninstall')
     return { kind: job.kind, cleaned: true, registered: false }
+  }
+  if (job.kind === 'ONAPPUSERREADY') {
+    // A job built by the webhook always carries `systemUser`; guard defensively for a malformed one.
+    if (!job.systemUser) return { kind: job.kind, cleaned: false, registered: false }
+    const outcome = await deps.saveSystemUser(
+      { memberId: job.memberId, userId: job.systemUser.userId, appTokenHash: job.systemUser.appTokenHash },
+      { finalAttempt: ctx.finalAttempt ?? false }
+    )
+    return { kind: job.kind, cleaned: false, registered: false, systemUser: outcome }
   }
   // ONAPPINSTALL: register the portal. `credentials` is always present for a
   // register job built by the webhook; guard defensively for a malformed job.

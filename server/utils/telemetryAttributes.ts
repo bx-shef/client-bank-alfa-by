@@ -32,7 +32,7 @@ export const SAFE_MANUAL_ATTR_KEYS = new Set<string>([
   // queue / job
   'job.queue', // 'crm-sync' | 'file-parse' | 'bank-fetch' | 'b24-events' | cron.*
   'job.provider', // BankProviderId
-  'job.kind', // event job kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL' (event type, not content)
+  'job.kind', // event job kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL' | 'ONAPPUSERREADY' (event type, not content)
   'job.op_count', // number of operations in a batch / fetched / parsed count
   'job.outcome', // 'ok' | 'error'
   'job.outcome_kind', // deletion-reconcile outcome enum (reconciled-target/notified-company/… — verdict, not content)

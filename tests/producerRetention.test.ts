@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { EventJob } from '../server/queue/topology'
+import { parseSystemUserEvent } from '../app/utils/b24Events'
 
 // Privacy retention (#245): jobs whose payload carries statement content (financial PII) — the
 // parsed file (file-parse) and the normalized StatementItem[] (crm-sync) — must be enqueued with
@@ -17,7 +19,9 @@ vi.mock('bullmq', () => ({
   }
 }))
 
-const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, enqueueRegistryWrite, enqueueActivityBind, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION, CRM_RETRY_RETENTION, DEFERRED_WRITE_RETRY } = await import('../server/queue/producers')
+const { stallBudgetMs } = await import('../server/utils/queueAlert')
+const { Q_EVENTS } = await import('../server/queue/topology')
+const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, enqueueRegistryWrite, enqueueActivityBind, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION, CRM_RETRY_RETENTION, DEFERRED_WRITE_RETRY, SYSTEM_USER_RETRY_OPTS } = await import('../server/queue/producers')
 
 afterEach(() => {
   adds.length = 0
@@ -54,6 +58,47 @@ describe('producer retention wiring', () => {
     expect(optsFor('b24-events')).toMatchObject(CREDENTIAL_JOB_RETENTION)
     expect(optsFor('b24-events')!.removeOnComplete).toBe(true)
     expect(optsFor('b24-events')).toHaveProperty('jobId')
+    // Install/uninstall keep the queue's default retries — the long patience is ONAPPUSERREADY's own.
+    expect(optsFor('b24-events')).not.toHaveProperty('attempts')
+  })
+
+  it('ONAPPUSERREADY waits for the install with its own retries, and keeps retention + jobId', async () => {
+    // The event may arrive before the install is persisted, and only the install's stored token
+    // can authenticate it — so the consumer retries until it is there (≈2.5 min, see producers.ts).
+    await enqueueEvent({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 5, appTokenHash: 'h' } })
+    const opts = optsFor('b24-events')!
+    expect(opts).toMatchObject({ ...CREDENTIAL_JOB_RETENTION, ...SYSTEM_USER_RETRY_OPTS })
+    // Second line behind the shape checks: BullMQ refuses an oversized payload instead of storing it.
+    expect(opts.sizeLimit).toBeGreaterThan(0)
+    expect(opts).toHaveProperty('jobId')
+    const { attempts, backoff, delay } = SYSTEM_USER_RETRY_OPTS
+    expect(backoff.type).toBe('exponential') // the sum below assumes it
+    // The first look is delayed too: a claim that beats the install failed its first attempt every
+    // time, costing a retry WARN and an error span per install (review of #783). Measured gap ~0.8 s,
+    // so at least a second — and no longer than the first backoff step.
+    expect(delay).toBeGreaterThanOrEqual(1_000)
+    expect(delay).toBeLessThanOrEqual(backoff.delay)
+    let total = delay
+    for (let n = 1; n < attempts; n++) total += backoff.delay * 2 ** (n - 1)
+    expect(total, 'far above the normal second or two between the two events').toBeGreaterThanOrEqual(60_000)
+    // A job bouncing in backoff counts as unfinished for the stall alert — stay inside its budget.
+    expect(total, 'and inside the stall budget of b24-events').toBeLessThan(stallBudgetMs(Q_EVENTS)!)
+  })
+
+  it('ONAPPUSERREADY sizeLimit fits the LARGEST claim the parser admits, and stays tight', () => {
+    // Too small and genuine claims are refused by BullMQ silently; huge and the protection is off.
+    // The parser bounds the domain in CODE POINTS (253), so the worst case is 4-byte characters.
+    const job: EventJob = {
+      memberId: 'a'.repeat(64), domain: '\u{1F600}'.repeat(253), kind: 'ONAPPUSERREADY', ts: '9'.repeat(12),
+      systemUser: { userId: Number.MAX_SAFE_INTEGER, appTokenHash: 'f'.repeat(64) }
+    }
+    expect(() => parseSystemUserEvent({
+      event: 'ONAPPUSERREADY', ts: job.ts, data: { user_id: String(job.systemUser!.userId) },
+      auth: { member_id: job.memberId, domain: job.domain, application_token: 't'.repeat(128) }
+    }), 'the parser really admits this claim').not.toThrow()
+    const bytes = Buffer.byteLength(JSON.stringify(job), 'utf8')
+    expect(bytes).toBeLessThanOrEqual(SYSTEM_USER_RETRY_OPTS.sizeLimit)
+    expect(SYSTEM_USER_RETRY_OPTS.sizeLimit).toBeLessThanOrEqual(bytes * 4)
   })
 
   it('bank-fetch REMOVES the completed job — that frees the stable jobId for the next sweep', async () => {

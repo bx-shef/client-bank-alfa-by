@@ -78,6 +78,25 @@ export function portalErrorCode(e: unknown): string {
 const SDK_WRAPPER_CODE = 'JSSDK_UNKNOWN_ERROR'
 
 /**
+ * The REST method the failure happened on, or an empty string. Read structurally, like the code:
+ * `PortalRestError.method` for what our transport wrapped, `AjaxError.requestInfo.method` for what the
+ * SDK threw raw (hard codes, see `portalErrorCode`), one level of `originalError` for the SDK wrapper.
+ *
+ * ⚠ Needed where the SAME code means different things on different calls: `ACCESS_DENIED` on the
+ * `crm.item.add` that carried a responsible is a verdict about that responsible, while the same code
+ * on the preceding `crm.item.list` is a verdict about our rights to read (`withElementResponsible`).
+ */
+export function portalErrorMethod(e: unknown): string {
+  const read = (x: unknown): string => {
+    const o = x as { method?: unknown, requestInfo?: { method?: unknown } } | null | undefined
+    if (typeof o?.method === 'string' && o.method) return o.method
+    const viaRequest = o?.requestInfo?.method
+    return typeof viaRequest === 'string' ? viaRequest : ''
+  }
+  return read(e) || read((e as { originalError?: unknown } | null | undefined)?.originalError)
+}
+
+/**
  * Portal error codes that mean «the ADMIN's recognition-map setting is wrong», per lookup shape.
  *
  * ⚠ The two sets differ because the admin-supplied parameter differs, and conflating them would

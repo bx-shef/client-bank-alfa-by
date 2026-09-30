@@ -43,7 +43,9 @@ import {
 import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
-import { getApplicationToken, saveToken, clearSubscriptionEnded } from '../utils/tokenStore'
+import { getApplicationToken, getSystemUserId, saveToken, setSystemUserId, clearSubscriptionEnded } from '../utils/tokenStore'
+import { applySystemUserClaim, withElementResponsible } from '../utils/systemUser'
+import type { ResponsibleResolver } from '../utils/distributionLedgerWrite'
 import { markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
 import { saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
@@ -152,6 +154,13 @@ const OP_LOG_MODE = resolveOpLogMode(process.env.STATEMENT_OP_LOG)
 const DEMO_DELAY = demoDelayMs(Number(process.env.DEMO_DELAY_MS ?? 600))
 const demoPause = (account: string): Promise<void> =>
   isDemoAccount(account) && DEMO_DELAY > 0 ? delay(DEMO_DELAY) : Promise.resolve()
+
+/** Run a smart-process write with the responsible of the elements it CREATES: the app's system user,
+ *  else the installer (owner's decision 2026-09-29; the installer = no field, the documented portal
+ *  default) — asked lazily, only on the create branch (one DB read), and retried on the installer if
+ *  the portal refuses the system user (`withElementResponsible`). */
+const withResponsible = <T>(memberId: string, write: (responsible: ResponsibleResolver) => Promise<T>): Promise<T> =>
+  withElementResponsible(memberId, { loadSystemUserId: m => getSystemUserId(dbQuery, m) }, write)
 
 /** Live side-effects for the handlers. Transports are stubs for now (return the
  *  demo batch / nothing) with TODOs pointing at the stage that fills them in. */
@@ -290,7 +299,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // Throwing at least counts it; the activity write hits the same dead token a line later anyway.
       if (!call) throw new Error(`writePaymentRegistry: no portal token for ${memberId}`)
       try {
-        return await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+        return await withResponsible(memberId, r => writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call, r))
       } catch (e) {
         // Logged HERE and rethrown: the handler counts the failure (and keeps the activity, see the
         // comment at its call site), but only this layer has the portal's actual error text. The
@@ -317,7 +326,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // ⚠ Нет токена — `already`, а НЕ throw: запись идёт поверх уже обработанной операции (дело
       // создано прошлым прогоном), и валить из-за неё разбор остальной пачки нечем оправдать.
       if (!call) return 'already'
-      return await backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+      return await withResponsible(memberId, r => backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call, r))
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
@@ -506,7 +515,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`writeLedger: no portal token for ${memberId} — retry (ledger write pending)`)
-      const res = await writeLedgerAllocation(etids.paymentSp, etids.distributionSp, item, target, companyId, call)
+      const res = await withResponsible(memberId, r => writeLedgerAllocation(etids.paymentSp, etids.distributionSp, item, target, companyId, call, r))
       return res.rowCreated
     },
     // TRIGGER dedup pre-check on the SP-ledger marker (#109 §9.3 #6 — replaces the Postgres
@@ -525,7 +534,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`writeTriggerFact: no portal token for ${memberId} — retry (trigger record pending)`)
-      const res = await writeTriggerLedgerFact(etids.paymentSp, etids.distributionSp, item, target, companyId, call)
+      const res = await withResponsible(memberId, r => writeTriggerLedgerFact(etids.paymentSp, etids.distributionSp, item, target, companyId, call, r))
       return res.created
     },
     // Fire the portal automation trigger for a decided trigger target (#79). BEST-EFFORT,
@@ -692,6 +701,12 @@ export function liveHandlerDeps(): HandlerDeps {
         applicationToken: c.applicationToken
       }, Number(job.ts) || 0)
     },
+    // ONAPPUSERREADY (the app's system user): ALWAYS verify against the token stored now, then record
+    // (the route's own check may predate an uninstall + reinstall — see `applySystemUserClaim`).
+    saveSystemUser: (claim, opts) => applySystemUserClaim(claim, {
+      loadApplicationToken: memberId => getApplicationToken(dbQuery, memberId),
+      setSystemUserId: (memberId, userId) => setSystemUserId(dbQuery, memberId, userId)
+    }, opts),
     // Uninstall always erases EVERYTHING for the portal: token row + import status +
     // allocation facts (#184) + lifetime metrics + connected bank tokens (stage 5). `eventTs`
     // records the ordering tombstone (#77). Activity dedup
@@ -755,7 +770,7 @@ export function startEventWorker(deps: HandlerDeps): Worker {
     'job.queue': 'b24-events',
     'job.kind': job.data.kind,
     'portal.hash': portalHash(job.data.memberId)
-  }, () => handleEventJob(job.data, deps)), { connection: connectionOptions() })
+  }, () => handleEventJob(job.data, deps, { finalAttempt: isFinalAttempt(job) })), { connection: connectionOptions() })
 }
 
 // ── crm-sync stalled-reprocessing guard (#163, port from ai-price-import) ────────────────────
@@ -988,6 +1003,7 @@ export function liveRegistryWriteDeps(): RegistryWriteJobDeps {
   return {
     resolvePortalCall,
     writePaymentRegistry: writePaymentRegistryViaRest,
+    withResponsible,
     findActivityId: findActivityByMarker,
     // ⚠ No batch — a single binding, and the same path the bindings retry takes.
     bindActivity: (activityId, refs, call) => bindActivityViaRest(activityId, refs, call)

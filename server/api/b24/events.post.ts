@@ -9,10 +9,12 @@
 import { parseBracketForm } from '../../../app/utils/b24Events'
 import { dbQuery } from '../../db/client'
 import { handleEventRequest } from '../../utils/b24EventsHandler'
-import { getApplicationToken, saveToken } from '../../utils/tokenStore'
+import { getApplicationToken, saveToken, setSystemUserId } from '../../utils/tokenStore'
 import { LIVE_PORTAL_PURGE_DEPS, portalPurgeReasonText, purgePortalStorage } from '../../utils/portalPurge'
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
+import { incrementWithTtl } from '../../queue/connection'
+import { admitDeferredClaim } from '../../utils/systemUser'
 import { rawOauthRefresh, verifyInstallMember, type OAuthFetchFn } from '../../utils/verifyInstallMember'
 import { useServerLogger } from '../../utils/serverLogger'
 import { portalHash } from '../../utils/telemetryAttributes'
@@ -72,6 +74,11 @@ export default defineEventHandler(async (event) => {
         )
         await purgePortalStorage(dbQuery, memberId, eventTs, LIVE_PORTAL_PURGE_DEPS)
       },
+      // ONAPPUSERREADY with Redis down: only a VERIFIED claim reaches here (see the handler).
+      saveSystemUser: async (memberId, userId) => {
+        await setSystemUserId(dbQuery, memberId, userId)
+      },
+      admitDeferredClaim: () => admitDeferredClaim(incrementWithTtl, Date.now()),
       encrypt: encryptSecret,
       now: () => Date.now(),
       bindInstallMember
@@ -80,7 +87,12 @@ export default defineEventHandler(async (event) => {
     if (result.action) {
       // member_id is a non-secret routing id; outcome tells whether the worker will
       // persist (queued) or we already wrote it here (sync-fallback, Redis down).
-      log.info(`${result.action.type} member_id=${result.action.memberId} (${result.outcome})`)
+      // ⚠ An UNVERIFIED system-user claim is named by the portal hash: its member_id is whatever the
+      // sender wrote, and the log should not attribute it to a real portal before the worker checks.
+      const who = result.action.type === 'system-user' && !result.action.verified
+        ? `portal=${portalHash(result.action.memberId)} unverified`
+        : `member_id=${result.action.memberId}`
+      log.info(`${result.action.type} ${who} (${result.outcome})`)
     }
 
     setResponseStatus(event, result.status)

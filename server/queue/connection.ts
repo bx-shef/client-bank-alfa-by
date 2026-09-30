@@ -124,8 +124,9 @@ export async function claimCooldownSlot(key: string, ttlSec: number): Promise<bo
 
 /** Increment a counter `key` and return the new value, setting a TTL on first creation (Redis
  *  `INCR` then `EXPIRE` when the value is 1). A self-expiring per-window counter — used by the
- *  program feedback hourly cap (docs/FEEDBACK.md). Uses the shared queue client (no new connection).
- *  Throws if REDIS_URL is unset — guard with queueEnabled() first. */
+ *  program feedback hourly cap (docs/FEEDBACK.md) and the per-minute cap on unverified system-user
+ *  claims (`admitDeferredClaim`, docs/B24_EVENTS.md). Uses the shared queue client (no new
+ *  connection). Throws if REDIS_URL is unset — guard with queueEnabled() first. */
 export async function incrementWithTtl(key: string, ttlSec: number): Promise<number> {
   const client = (await redisClient()) as unknown as {
     incr: (k: string) => Promise<number>

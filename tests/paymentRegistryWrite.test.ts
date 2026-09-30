@@ -221,6 +221,42 @@ describe('#575 writePaymentRegistryViaRest', () => {
       expect(addParams.fields.companyId).toBe(expected)
     }
   })
+
+  it('новый элемент ставится на переданного ответственного (служебный пользователь / установивший)', async () => {
+    const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
+      ? { result: { items: [] } }
+      : { result: { item: { id: '1' } } }))
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, async () => 512)
+    const addParams = recorded(call).find(c => c[0] === 'crm.item.add')![1] as { fields: Record<string, unknown> }
+    expect(addParams.fields.assignedById).toBe(512)
+  })
+
+  it('ответственный не назван (служебного пользователя нет) — поля НЕТ вовсе: портал ставит вызывающего, то есть установившего', async () => {
+    // Документация crm.item.add: assignedById по умолчанию — «идентификатор пользователя, который
+    // вызывает метод». Ноль или пустое значение вместо отсутствия поля могли бы значить другое.
+    const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
+      ? { result: { items: [] } }
+      : { result: { item: { id: '1' } } }))
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, async () => null)
+    const addParams = recorded(call).find(c => c[0] === 'crm.item.add')![1] as { fields: Record<string, unknown> }
+    expect('assignedById' in addParams.fields).toBe(false)
+  })
+
+  it('найденному элементу ответственного НЕ переставляем — дописываются только колонки реестра', async () => {
+    // Ответственный ставится в момент создания; дозапись колонок не должна тихо переносить уже
+    // существующие элементы на другого человека.
+    const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
+      ? { result: { items: [{ id: '42' }] } }
+      : { result: { item: {} } }))
+    // И даже НЕ спрашиваем, кого бы поставить: сбой чтения базы не имеет права ломать
+    // дозапись колонок существующего элемента (находка ревью).
+    const responsible = vi.fn(async () => 512)
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, responsible)
+    const update = recorded(call).find(c => c[0] === 'crm.item.update')
+    expect(update).toBeTruthy()
+    expect((update![1] as { fields: Record<string, unknown> }).fields.assignedById).toBeUndefined()
+    expect(responsible).not.toHaveBeenCalled()
+  })
 })
 
 describe('#578 колонки дописываются элементу, который УЖЕ существует', () => {
@@ -289,6 +325,13 @@ describe('#45 backfillPaymentRegistryViaRest', () => {
     const fields = (add![1].fields ?? {}) as Record<string, unknown>
     expect(fields[dirField]).toBe('Приход')
     expect(fields.companyId, 'ссылка на плательщика — половина смысла реестра').toBe(9)
+  })
+
+  it('создаваемый дозаписью элемент получает того же ответственного, что и на обычном пути', async () => {
+    const call = fake([])
+    await backfillPaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, async () => 512)
+    const add = recorded(call).find(([m]) => m === 'crm.item.add')
+    expect((add![1].fields as Record<string, unknown>).assignedById).toBe(512)
   })
 
   it('элемент ПУСТОЙ — дописываем колонки', async () => {
