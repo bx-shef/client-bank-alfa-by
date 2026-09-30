@@ -242,7 +242,14 @@ while time.time() - t < 20:
         if not d:
             break
         out += d
+# Конец вывода приходит, когда потомок ЗАКРЫЛ терминал, — за миг до выхода: один WNOHANG здесь
+# проигрывал эту гонку и писал EXIT -1 при успешном скрипте (CI, 2026-09-30). Зависание по-прежнему
+# ловится — на выход даётся несколько секунд, а не вечность.
+deadline = time.time() + 5
 done, status = os.waitpid(pid, os.WNOHANG)
+while not done and time.time() < deadline:
+    time.sleep(0.05)
+    done, status = os.waitpid(pid, os.WNOHANG)
 if not done:
     os.kill(pid, 9)
 sys.stdout.write(('EXIT %d ' % (os.waitstatus_to_exitcode(status) if done else -1)) + out.decode('utf-8', 'replace'))
