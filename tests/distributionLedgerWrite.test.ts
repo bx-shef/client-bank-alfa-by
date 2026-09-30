@@ -259,6 +259,18 @@ describe('writeLedgerAllocation (orchestrator)', () => {
     expect(adds.map(c => (c.params.fields as Record<string, unknown>).assignedById)).toEqual([512, 512])
   })
 
+  it('omits assignedById on BOTH elements when no responsible is named (portal default = the caller)', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': () => ({ result: { items: [] } }),
+      'crm.item.add': params => (params.entityTypeId === 1044 ? { result: { item: { id: 500 } } } : { result: { item: { id: 900 } } }),
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    await writeLedgerAllocation(PSP, DSP, OP, TARGET, '12', call, async () => null)
+    const adds = calls.filter(c => c.method === 'crm.item.add')
+    expect(adds).toHaveLength(2)
+    expect(adds.every(c => !('assignedById' in (c.params.fields as Record<string, unknown>)))).toBe(true)
+  })
+
   it('is idempotent — existing carrier + row are reused, nothing double-added', async () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {

@@ -254,7 +254,11 @@ function joinId(parts: (string | number)[]): string {
 }
 
 export function eventJobId(job: EventJob): string {
-  return joinId(['evt', job.memberId, job.kind, job.ts])
+  const base = ['evt', job.memberId, job.kind, job.ts]
+  // ONAPPUSERREADY may be queued BEFORE it is authenticated (the install is not persisted yet), so a
+  // forgery with the same member_id and ts must not occupy the id of the genuine claim — BullMQ would
+  // silently keep the first one. The token hash tells them apart (review of #783).
+  return joinId(job.kind === 'ONAPPUSERREADY' && job.systemUser ? [...base, job.systemUser.appTokenHash.slice(0, 16)] : base)
 }
 
 export function fetchJobId(job: FetchJob): string {

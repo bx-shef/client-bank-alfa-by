@@ -3,11 +3,11 @@ import type { StatementItem } from '../app/types/statement'
 import type { AllocationCandidate } from '../app/utils/allocation'
 import type { HandlerDeps } from '../server/queue/handlers'
 import type { RegistryWriteJobDeps } from '../server/utils/deferredWriteJobs'
-import { resetTokenOwnerCache } from '../server/utils/portalTokenOwner'
 import { applicationTokenHash, resetSystemUserRefusals } from '../server/utils/systemUser'
 
 // Ответственный элементов смарт-процессов в НАСТОЯЩЕМ воркере (решение владельца 2026-09-29):
-// служебный пользователь приложения, а где его нет — установивший. Писатели и выбор покрыты своими
+// служебный пользователь приложения, а где его нет — установивший, то есть поле НЕ передаём
+// (умолчание `crm.item.add` — вызывающий, а вызываем мы его токеном). Писатели и выбор покрыты своими
 // тестами; здесь — шов между ними. Все четыре пути создания элемента (реестр, дозапись истории,
 // разнесение, отметка триггера) и отложенная дозапись обязаны спрашивать ОДНОГО и того же
 // ответственного: разойдись они — элементы одного портала лежали бы на разных людях в зависимости
@@ -18,13 +18,12 @@ const h = vi.hoisted(() => {
   const sent: Array<{ method: string, params: Record<string, unknown> }> = []
   const call = async (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
     sent.push({ method, params })
-    if (method === 'profile') return { result: { ID: '3' } }
     if (method === 'crm.item.list') return { result: { items: flags.foundExisting ? [{ id: 42 }] : [] } }
     if (method === 'crm.item.add') return { result: { item: { id: 700 } } }
     return { result: { item: {} } }
   }
   const resolver = Object.assign(async () => call, { evict: () => {}, batch: async () => null })
-  const store = { stored: '', written: [] as Array<[string, number]> }
+  const store = { stored: '', written: [] as Array<[string, number]>, reads: [] as string[] }
   return { sent, resolver, store, flags }
 })
 
@@ -36,7 +35,10 @@ vi.mock('../server/utils/portalSdkResolver', async orig => ({
 vi.mock('../server/utils/tokenStore', async orig => ({
   ...(await orig<typeof import('../server/utils/tokenStore')>()),
   // Портал 'SYS' прислал служебного пользователя 512, остальные — нет.
-  getSystemUserId: async (_q: unknown, memberId: string) => (memberId === 'SYS' ? 512 : null),
+  getSystemUserId: async (_q: unknown, memberId: string) => {
+    h.store.reads.push(memberId)
+    return memberId === 'SYS' ? 512 : null
+  },
   getApplicationToken: async () => h.store.stored,
   setSystemUserId: async (_q: unknown, memberId: string, userId: number) => {
     h.store.written.push([memberId, userId])
@@ -54,7 +56,7 @@ beforeAll(async () => {
 beforeEach(() => {
   h.sent.length = 0
   h.store.written.length = 0
-  resetTokenOwnerCache()
+  h.store.reads.length = 0
   resetSystemUserRefusals()
 })
 
@@ -65,40 +67,41 @@ const ITEM: StatementItem = {
 const SPS = { paymentSp: { entityTypeId: 1044, id: 44 }, distributionSp: { entityTypeId: 1046, id: 46 } }
 const INVOICE: AllocationCandidate = { kind: 'invoice', id: '39', amount: 100, currency: 'BYN' }
 const DEAL: AllocationCandidate = { kind: 'deal', id: '77', amount: 0, currency: 'BYN' }
-const responsibles = () => h.sent.filter(s => s.method === 'crm.item.add').map(s => (s.params.fields as Record<string, unknown>).assignedById)
+const addFields = () => h.sent.filter(s => s.method === 'crm.item.add').map(s => s.params.fields as Record<string, unknown>)
+const responsibles = () => addFields().map(f => f.assignedById)
 
 describe('ответственный новых элементов в liveHandlerDeps', () => {
-  it('служебный пользователь известен — на него все четыре пути, portal profile не спрашиваем', async () => {
+  it('служебный пользователь известен — на него все четыре пути', async () => {
     await deps.writePaymentRegistry!(ITEM, null, 'SYS', 'alfa-by', SPS.paymentSp)
     await deps.backfillRegistry!({ ...ITEM, docId: 'D2' }, null, 'SYS', 'alfa-by', SPS.paymentSp)
     await deps.writeLedger!({ ...ITEM, docId: 'D3' }, INVOICE, '12', 'SYS', SPS)
     await deps.writeTriggerFact!({ ...ITEM, docId: 'D4' }, DEAL, '12', 'SYS', SPS)
     // реестр 1 + дозапись 1 + разнесение 2 (элемент + строка) + триггер 2
     expect(responsibles()).toEqual([512, 512, 512, 512, 512, 512])
-    expect(h.sent.some(s => s.method === 'profile')).toBe(false)
   })
 
-  it('служебного пользователя нет — установивший (владелец токена), один profile на портал', async () => {
+  it('служебного пользователя нет — поле НЕ передаём (портал ставит вызывающего, то есть установившего), лишних вызовов нет', async () => {
     await deps.writePaymentRegistry!(ITEM, null, 'NOSYS', 'alfa-by', SPS.paymentSp)
     await deps.writeLedger!({ ...ITEM, docId: 'D3' }, INVOICE, '12', 'NOSYS', SPS)
-    expect(responsibles()).toEqual([3, 3, 3])
-    expect(h.sent.filter(s => s.method === 'profile')).toHaveLength(1)
+    expect(addFields()).toHaveLength(3)
+    expect(addFields().every(f => !('assignedById' in f))).toBe(true)
+    // «Установивший» — умолчание портала, а не наш запрос: ни profile, ни иного вызова ради него.
+    expect(h.sent.map(s => s.method).filter(m => m !== 'crm.item.list' && m !== 'crm.item.add' && m !== 'crm.item.update')).toEqual([])
   })
 
   it('отложенная дозапись реестра спрашивает того же ответственного', async () => {
-    const call = await h.resolver()
-    expect(await registry.withResponsible('SYS', call, r => r())).toBe(512)
-    expect(await registry.withResponsible('NOSYS', call, r => r())).toBe(3)
+    expect(await registry.withResponsible('SYS', r => r())).toBe(512)
+    expect(await registry.withResponsible('NOSYS', r => r())).toBeNull()
   })
 
-  it('элемент уже есть — ответственного не спрашиваем вовсе (ни базы, ни profile)', async () => {
+  it('элемент уже есть — ответственного не спрашиваем вовсе (базу не читаем)', async () => {
     h.flags.foundExisting = true
     try {
       await deps.writePaymentRegistry!(ITEM, null, 'NOSYS', 'alfa-by', SPS.paymentSp)
     } finally {
       h.flags.foundExisting = false
     }
-    expect(h.sent.some(s => s.method === 'profile')).toBe(false)
+    expect(h.store.reads).toEqual([])
     expect(h.sent.some(s => s.method === 'crm.item.add')).toBe(false)
   })
 })

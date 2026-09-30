@@ -13,6 +13,7 @@ import type { PortalCredentials } from '../../app/types/b24Events'
 import {
   appTokenVerdict,
   B24_EVENT_INSTALL,
+  B24_EVENT_SYSTEM_USER,
   B24_EVENT_UNINSTALL,
   eventCode,
   extractPortalCredentials,
@@ -20,7 +21,7 @@ import {
   parseSystemUserEvent,
   parseUninstallEvent
 } from '../../app/utils/b24Events'
-import { B24_DELETION_EVENTS, B24_SYSTEM_USER_EVENT } from '../../app/config/b24'
+import { B24_DELETION_EVENTS } from '../../app/config/b24'
 import type { DeletionJob, EventJob } from '../queue/topology'
 import type { PortalToken } from './tokenStore'
 import type { InstallMemberResult } from './verifyInstallMember'
@@ -152,12 +153,12 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
 
   // ONAPPUSERREADY — the app's system user (owner's decision 2026-09-29: smart-process elements go
   // on it). Authenticated like every event but install: by the stored application token.
-  if (code === B24_SYSTEM_USER_EVENT) {
+  if (code === B24_EVENT_SYSTEM_USER) {
     let claim
     try {
       claim = parseSystemUserEvent(payload)
     } catch {
-      return { status: 400, body: { error: `malformed ${B24_SYSTEM_USER_EVENT}` } }
+      return { status: 400, body: { error: `malformed ${B24_EVENT_SYSTEM_USER}` } }
     }
     // What travels to the queue is a HASH of the token, never the token itself; the consumer
     // re-verifies it against the token stored at WRITE time (an uninstall + instant reinstall may land
@@ -169,17 +170,17 @@ export async function processB24Event(payload: unknown, deps: B24EventDeps): Pro
       if (verdict !== 'accept') return deny(verdict)
       return {
         status: 200,
-        body: { ok: true, event: B24_SYSTEM_USER_EVENT, memberId: claim.memberId },
+        body: { ok: true, event: B24_EVENT_SYSTEM_USER, memberId: claim.memberId },
         action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId, appTokenHash, verified: true }
       }
     }
-    // ⚠ No stored token is NOT a denial here, unlike uninstall. The portal sends this event together
-    // with ONAPPINSTALL, and the install is persisted only after a network round-trip to Bitrix's
-    // OAuth server (#162) — so this event routinely arrives first. Online events are not resent;
-    // refusing would lose the system user for good. The consumer waits for the install and verifies.
+    // ⚠ No stored token is NOT a denial here, unlike uninstall. Per the docs both events fire when the
+    // install finishes, and the install is persisted only after a network round-trip to Bitrix's
+    // OAuth server (#162) — so this event may arrive first (the order is not measured). Online events
+    // are not resent; refusing would lose the system user for good. The consumer waits and verifies.
     return {
       status: 200,
-      body: { ok: true, event: B24_SYSTEM_USER_EVENT, memberId: claim.memberId, deferred: true },
+      body: { ok: true, event: B24_EVENT_SYSTEM_USER, memberId: claim.memberId, deferred: true },
       action: { type: 'system-user', memberId: claim.memberId, userId: claim.userId, appTokenHash, verified: false }
     }
   }

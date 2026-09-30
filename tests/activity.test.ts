@@ -5,9 +5,9 @@ import {
   formatIsoDate,
   formatMoney,
   neutralizeBb,
-  portalUserId,
   toPortalDeadline
 } from '~/utils/activity'
+import { portalUserId } from '~/utils/portalUser'
 
 function makeItem(over: Partial<StatementItem> = {}): StatementItem {
   return {

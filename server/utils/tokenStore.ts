@@ -7,7 +7,7 @@
 // idempotently on boot by server/plugins/migrate.ts).
 
 import { decryptSecret, encryptSecret } from './secretCrypto'
-import { portalUserId } from '../../app/utils/activity'
+import { portalUserId } from '../../app/utils/portalUser'
 
 /** A thin DB query function (e.g. pg `pool.query`) returning the rows. */
 export type QueryFn = (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>
@@ -417,9 +417,10 @@ export async function setSystemUserId(query: QueryFn, memberId: string, userId: 
 }
 
 /**
- * id служебного пользователя портала, либо `null` — не знаем (портал не прислал событие: локальное
- * приложение, установка до этой правки, старая коробка). `null` значит «ставим установившего» — его
- * id берёт вызывающий сам (`withElementResponsible` → `tokenOwnerId`).
+ * id служебного пользователя портала, либо `null` — не знаем (событие до нас не дошло: локальное
+ * приложение, установка до этой правки, портал без такого события). `null` значит «ставим
+ * установившего»: поле ответственного не передаётся, и по документации `crm.item.add` им становится
+ * вызывающий метод — владелец сохранённого токена.
  *
  * ⚠ Разбор тем же строгим `portalUserId`, что у всех id пользователя портала: BIGINT приходит из pg
  * строкой, и ноль (умолчание колонки) обязан читаться как «нет», а не как пользователь 0.

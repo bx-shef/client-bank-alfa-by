@@ -201,12 +201,46 @@ describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
 
   it.each([['0'], ['-5'], ['0x11'], ['1e1'], ['9007199254740993'], ['abc'], ['']])(
     'rejects a user id the portal would not have sent: %j', (raw) => {
-      // It becomes the responsible of CRM elements, and the portal does not validate that field:
-      // '0x11' would be user 17, a digit string past 2^53 somebody else entirely.
+      // It becomes the responsible of CRM elements, and whether the portal validates that field
+      // there is not measured: '0x11' would be user 17, a digit string past 2^53 somebody else.
       const p = payload() as { data: Record<string, unknown> }
       p.data.user_id = raw
       expect(() => parseSystemUserEvent(p)).toThrow(/user_id/)
     })
+
+  // The only event whose fields may reach the queue before authentication: a forged request must not
+  // park megabytes in Redis nor forge log lines with a newline (review of #783).
+  it.each([
+    ['member_id', 'x'.repeat(65)],
+    ['member_id', 'abc\n[auth] ERROR: fake'],
+    ['member_id', 'a b'],
+    ['application_token', 't'.repeat(129)],
+    ['application_token', 'tok\r\nX'],
+    ['domain', 'evil.example/path'],
+    ['domain', 'a'.repeat(254)]
+  ])('rejects a malformed auth.%s before anything looks at it', (field, value) => {
+    const p = payload() as { auth: Record<string, unknown> }
+    p.auth[field] = value
+    expect(() => parseSystemUserEvent(p)).toThrow(new RegExp(`malformed ${field}`))
+  })
+
+  it.each([['1756890123abc'], ['1'.repeat(13)], ['-1']])('rejects a malformed ts %j', (ts) => {
+    const p = payload() as Record<string, unknown>
+    p.ts = ts
+    expect(() => parseSystemUserEvent(p)).toThrow(/malformed ts/)
+  })
+
+  it('error messages name the field and never echo the attacker-controlled value', () => {
+    const p = payload() as { auth: Record<string, unknown> }
+    p.auth.member_id = 'SECRET-LOOKING-VALUE\n'
+    expect(() => parseSystemUserEvent(p)).toThrow(/^(?!.*SECRET-LOOKING-VALUE).*$/s)
+  })
+
+  it('accepts the shapes real portals send: 32-hex ids, a self-hosted host with a port', () => {
+    const p = payload() as { auth: Record<string, unknown> }
+    p.auth.domain = 'portal.example.by:8443'
+    expect(parseSystemUserEvent(p).userId).toBe(512)
+  })
 
   it('rejects an event whose data and auth name different portals', () => {
     const p = payload() as { data: Record<string, unknown> }

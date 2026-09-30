@@ -27,7 +27,7 @@ import type { AllocationTargetKind } from './allocation'
 import type { AllocationSource, DistributionEntry } from './manualAllocation'
 import { distributionSummary } from './manualAllocation'
 import { round2 } from './money'
-import { portalUserId } from './activity'
+import { portalUserId } from './portalUser'
 import { DISTRIBUTION_SP_FIELDS, PAYMENT_SP_FIELDS, buildUfFieldNameCamel, type SpRef } from '~/config/distributionSp'
 
 /** The field that links a distribution row to its parent PAYMENT carrier element: our OWN filterable
@@ -50,22 +50,22 @@ export interface DistributionRowInput {
   targetId: string
   source: AllocationSource
   marker: string
-  /** Ответственный строки. Кого ставить, решает вызывающий (служебный пользователь, иначе
-   *  установивший — `withElementResponsible`); билдер только несёт значение (`responsibleField`). */
+  /** The row's responsible. The caller decides who (the app's system user, else nobody — see
+   *  `responsibleField`); the builder only carries the value. */
   assignedById?: number
 }
 
 /**
- * Поле ответственного для нового элемента смарт-процесса — или ничего.
+ * The responsible field of a new smart-process element — or nothing.
  *
- * Решение владельца 2026-09-29: элементы — на служебного пользователя приложения, а где его нет — на
- * установившего. Кого именно, решает вызывающий (`withElementResponsible`, сервер) и передаёт ЯВНО,
- * в том числе установившего: как портал заполняет ответственного без этого поля, документация
- * `crm.item.add` не говорит, а мы не замеряли. Отсутствие поля здесь — только «вызывающий не дал».
+ * Owner's decision 2026-09-29: elements go to the app's system user, and where there is none, to the
+ * installer. The installer is the ABSENCE of the field: the `crm.item.add` docs name the default —
+ * «the id of the user calling the method», and we call it with the installer's stored token. The
+ * caller (`withElementResponsible`, server) decides; this only renders the value.
  *
- * ⚠ Тот же строгий разбор, что у ответственного дела (`portalUserId`): проверяет ли портал это поле
- * у элемента, не замерено (у дела — не проверяет, замер коробки), поэтому кривое значение не должно
- * уйти в портал вовсе — оно могло бы молча поставить элемент на чужого человека или ни на кого.
+ * ⚠ The same strict parser as the activity's responsible (`portalUserId`): whether the portal
+ * validates this field on an element is not measured (on an activity it does not — box code), so a
+ * malformed value must never reach the portal — it could silently land the element on somebody else.
  */
 function responsibleField(assignedById: unknown): { assignedById?: number } {
   const id = portalUserId(assignedById)
@@ -361,8 +361,8 @@ export interface PaymentElementInput {
    * то есть ровно там, где человек ищет платёж глазами, и не говорит о платеже НИЧЕГО.
    */
   title?: string
-  /** Ответственный элемента — решает вызывающий (см. `responsibleField`). Ставится ТОЛЬКО при
-   *  создании: найденный по маркеру элемент не трогаем. */
+  /** The element's responsible — the caller decides (see `responsibleField`). Set ONLY on
+   *  creation: an element found by its marker is left alone. */
   assignedById?: number
 }
 

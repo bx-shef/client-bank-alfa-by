@@ -62,10 +62,17 @@ function nextOffset(resp: Record<string, unknown>): number | null {
 /**
  * Who becomes the responsible of an element this module CREATES — asked lazily, only on the create
  * branch, so a found element never pays for it (and a failing lookup never breaks writing columns to
- * an existing one). The worker supplies it (`withElementResponsible`): the app's system user, else
- * the installer (owner's decision 2026-09-29).
+ * an existing one). The worker supplies it (`withElementResponsible`): the app's system user, or
+ * `null` — then the field is not sent and, per the `crm.item.add` docs, the responsible is the user
+ * calling the method: the owner of our stored token, i.e. the installer (owner's decision 2026-09-29).
  */
-export type ResponsibleResolver = () => Promise<number>
+export type ResponsibleResolver = () => Promise<number | null>
+
+/** The builder input for a resolved responsible: the field, or nothing (portal default). */
+async function responsibleInput(responsible?: ResponsibleResolver): Promise<{ assignedById?: number }> {
+  const id = responsible ? await responsible() : null
+  return id === null ? {} : { assignedById: id }
+}
 
 /** Find an existing distribution row id by its dedup marker, or `null`. Empty marker → `null`
  *  without a REST call (an empty filter would list every row). */
@@ -87,7 +94,7 @@ export async function writeDistributionRow(
 ): Promise<{ id: string, created: boolean }> {
   const existing = await findDistributionByMarker(input.distributionSp, input.marker, call)
   if (existing) return { id: existing, created: false }
-  const addCall = buildDistributionRowAddCall(responsible ? { ...input, assignedById: await responsible() } : input)
+  const addCall = buildDistributionRowAddCall({ ...input, ...(await responsibleInput(responsible)) })
   const resp = await call(addCall.method, addCall.params)
   const id = extractAddedItemId(resp)
   if (!id) throw new Error('crm.item.add returned no distribution row id')
@@ -115,7 +122,7 @@ export async function ensurePaymentElement(
 ): Promise<{ id: string, created: boolean }> {
   const existing = await findPaymentByMarker(paymentSp, input.marker, call)
   if (existing) return { id: existing, created: false }
-  const addCall = buildPaymentElementAddCall(paymentSp, responsible ? { ...input, assignedById: await responsible() } : input)
+  const addCall = buildPaymentElementAddCall(paymentSp, { ...input, ...(await responsibleInput(responsible)) })
   const resp = await call(addCall.method, addCall.params)
   const id = extractAddedItemId(resp)
   if (!id) throw new Error('crm.item.add returned no payment element id')

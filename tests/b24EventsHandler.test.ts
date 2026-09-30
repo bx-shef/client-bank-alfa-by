@@ -378,7 +378,8 @@ describe('handleEventRequest — expiresAt/TTL coercion', () => {
 
 // ONAPPUSERREADY — the app's system user (owner's decision 2026-09-29: smart-process elements go on
 // it). Authenticated by the stored application token, like every event but install; the twist is that
-// it routinely arrives BEFORE the install is persisted, and online events are never resent.
+// it may arrive BEFORE the install is persisted (the order is not measured), and online events are
+// never resent.
 describe('ONAPPUSERREADY (system user)', () => {
   const userReady = {
     event: 'ONAPPUSERREADY',
@@ -467,6 +468,15 @@ describe('ONAPPUSERREADY (system user)', () => {
     expect(res.status).toBe(503)
     expect(res.outcome).toBe('none')
     expect(deps.saveSystemUser).not.toHaveBeenCalled()
+  })
+
+  it('a malformed member_id is 400 BEFORE any lookup, hash, cap or queue', async () => {
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => '') })
+    const res = await handleEventRequest({ ...userReady, auth: { ...userReady.auth, member_id: 'x'.repeat(3000) } }, deps)
+    expect(res.status).toBe(400)
+    expect(deps.loadStoredToken).not.toHaveBeenCalled()
+    expect(deps.admitDeferredClaim).not.toHaveBeenCalled()
+    expect(deps.enqueue).not.toHaveBeenCalled()
   })
 
   it('a malformed event is 400 and touches nothing', async () => {

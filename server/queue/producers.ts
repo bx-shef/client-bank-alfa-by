@@ -42,16 +42,20 @@ export const CREDENTIAL_JOB_RETENTION = {
 } as const
 
 /**
- * Retries for ONAPPUSERREADY (the app's system user). The event arrives together with ONAPPINSTALL
- * and is often processed BEFORE the install is persisted — the install route first makes a network
- * call to Bitrix's OAuth server (#162) — while the only thing that authenticates this event is the
- * app token stored by that install. So the consumer waits for the install by retrying: 5+10+20+40+80
- * seconds ≈ two and a half minutes of patience, far above the normal gap of a second or two. The last
- * attempt gives up QUIETLY (see `applySystemUserClaim`): an exhausted job would count as our failure.
+ * Retries for ONAPPUSERREADY (the app's system user). Per the docs both events fire when the install
+ * finishes, and this one may be processed BEFORE the install is persisted — the install route first
+ * makes a network call to Bitrix's OAuth server (#162); the delivery order is neither documented nor
+ * measured — while the only thing that authenticates this event is the app token stored by that
+ * install. So the consumer waits for the install by retrying: 5+10+20+40+80 seconds ≈ two and a half
+ * minutes of patience, far above the gap that network call can plausibly open. The last attempt gives
+ * up QUIETLY (see `applySystemUserClaim`): an exhausted job would count as our failure.
  */
 export const SYSTEM_USER_RETRY_OPTS = {
   attempts: 6,
-  backoff: { type: 'exponential' as const, delay: 5_000 }
+  backoff: { type: 'exponential' as const, delay: 5_000 },
+  // Second line behind the shape checks of `parseSystemUserEvent`: this job may be queued before it
+  // is authenticated, and BullMQ refuses a payload over the limit instead of storing it.
+  sizeLimit: 1024
 } as const
 
 /** True if the job was enqueued; false if the queue is disabled (no Redis). */

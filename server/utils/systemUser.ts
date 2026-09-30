@@ -8,8 +8,9 @@
 //
 // ⚠ ПОЧЕМУ СВЕРКА ИДЁТ В ВОРКЕРЕ. Событие подлинно, только если его токен приложения совпал с
 // сохранённым при установке, — а установку записывает воркер ПОСЛЕ того, как роут события установки
-// сходил на сервер авторизации Битрикс24 (#162). Оба события портал шлёт по завершении установки
-// разом, так что это событие легко приходит раньше, чем установка записана. Отказать в таком случае
+// сходил на сервер авторизации Битрикс24 (#162). По документации оба события вызываются при
+// завершении установки; порядок доставки не документирован и не замерен, так что это событие может
+// прийти раньше, чем установка записана. Отказать в таком случае
 // нельзя — онлайн-события портал не повторяет, и служебный пользователь был бы потерян навсегда.
 // Ждать прямо в роуте тоже нельзя: если портал шлёт события по одному, он ждал бы нашего ответа, а
 // мы — его следующего события. Поэтому роут кладёт в очередь ОТПЕЧАТОК токена, а воркер сверяет его
@@ -24,11 +25,10 @@
 
 import { createHash } from 'node:crypto'
 import { safeEqual } from '../../app/utils/b24Events'
-import type { RestCall } from './companyLookup'
 import type { ResponsibleResolver } from './distributionLedgerWrite'
 import { portalErrorCode } from './portalError'
-import { tokenOwnerId } from './portalTokenOwner'
 import { useServerLogger } from './serverLogger'
+import { portalHash } from './telemetryAttributes'
 
 const log = useServerLogger('b24-events')
 
@@ -75,6 +75,9 @@ export interface SystemUserDeps {
  */
 export const MAX_DEFERRED_CLAIMS_PER_MINUTE = 30
 
+/** Сколько ждём счётчик потолка, прежде чем счесть Redis недоступным. */
+export const ADMIT_DEADLINE_MS = 1500
+
 /**
  * Пустить ли ещё одну несверенную заявку (`true`) — счётчик в Redis по минутному окну.
  *
@@ -83,19 +86,39 @@ export const MAX_DEFERRED_CLAIMS_PER_MINUTE = 30
  */
 export async function admitDeferredClaim(
   incr: (key: string, ttlSec: number) => Promise<number>,
-  nowMs: number
+  nowMs: number,
+  deadlineMs = ADMIT_DEADLINE_MS
 ): Promise<boolean> {
-  const count = await incr(`sysuser-deferred:${Math.floor(nowMs / 60_000)}`, 120)
+  // ⚠ Дедлайн обязателен: при недоступном, но настроенном Redis клиент очереди не отвечает ошибкой, а
+  // ЖДЁТ (офлайн-очередь ioredis, `maxRetriesPerRequest: null`) — и непроверенный запрос висел бы до
+  // таймаута nginx, копясь сотнями. Тот же приём, что у `pingRedis` (находка ревью #783).
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('sysuser cap: redis deadline')), deadlineMs)
+  })
+  const counted = incr(`sysuser-deferred:${Math.floor(nowMs / 60_000)}`, 120)
+  counted.catch(() => {}) // поздний отказ после дедлайна — не необработанное исключение
+  let count: number
+  try {
+    count = await Promise.race([counted, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
   if (count === MAX_DEFERRED_CLAIMS_PER_MINUTE + 1) {
     log.warning(`несверенных заявок о служебном пользователе больше ${MAX_DEFERRED_CLAIMS_PER_MINUTE} за минуту — лишние отброшены (похоже на поток подделок; настоящих — по одной на установку)`)
   }
   return count <= MAX_DEFERRED_CLAIMS_PER_MINUTE
 }
 
-/** Установка ещё не записана — повторить позже. Бросается ТОЛЬКО не на последней попытке. */
+/**
+ * Установка ещё не записана — повторить позже. Бросается ТОЛЬКО не на последней попытке.
+ *
+ * ⚠ В тексте — ХЕШ портала, не `member_id`: заявка ещё не проверена, а текст ошибки печатает
+ * наблюдатель падений задач (`workerObservability.ts`) как есть.
+ */
 export class SystemUserPendingError extends Error {
   constructor(memberId: string) {
-    super(`ONAPPUSERREADY: установка портала ${memberId} ещё не записана — повторим`)
+    super(`ONAPPUSERREADY: установка портала ${portalHash(memberId)} ещё не записана — повторим`)
     this.name = 'SystemUserPendingError'
   }
 }
@@ -116,12 +139,13 @@ export async function applySystemUserClaim(
   const stored = await deps.loadApplicationToken(claim.memberId)
   if (!stored) {
     if (!opts.finalAttempt) throw new SystemUserPendingError(claim.memberId)
-    log.warning(`portal ${claim.memberId}: служебный пользователь НЕ записан — установка так и не записалась, сверить событие не с чем; элементы останутся на установившем`)
+    // Хеш, а не `member_id`: заявка так и осталась непроверенной (как и ниже, при несовпадении).
+    log.warning(`portal ${portalHash(claim.memberId)}: служебный пользователь НЕ записан — установка так и не записалась, сверить событие не с чем; элементы останутся на установившем`)
     return 'expired'
   }
   // ⚠ Сравнение без раннего выхода: по времени ответа нельзя угадывать отпечаток по символу.
   if (!safeEqual(applicationTokenHash(stored), claim.appTokenHash)) {
-    log.warning(`portal ${claim.memberId}: событие о служебном пользователе НЕ прошло сверку токена приложения — отброшено`)
+    log.warning(`portal ${portalHash(claim.memberId)}: событие о служебном пользователе НЕ прошло сверку токена приложения — отброшено`)
     return 'mismatch'
   }
   if (!(await deps.setSystemUserId(claim.memberId, claim.userId))) {
@@ -163,44 +187,40 @@ export function resetSystemUserRefusals(): void {
  * приложения, а где его нет — установивший (решение владельца 2026-09-29: «там где нет такой
  * поддержки — пусть будет везде человек, который всё установил»).
  *
+ * ⚠ «Установивший» — это ОТСУТСТВИЕ поля (`null`): документация `crm.item.add` называет умолчание
+ * прямо — «идентификатор пользователя, который вызывает метод», а вызываем мы токеном установившего.
+ * Отдельного вызова `profile` ради того же ответа не нужно.
+ *
  * ⚠ Ответственный спрашивается ЛЕНИВО — только когда писатель действительно создаёт элемент — и один
- * раз на запись. Найденному по маркеру элементу он не нужен, и сбой чтения базы или `profile` не
- * имеет права ломать дозапись колонок существующего элемента (находка ревью: до ленивого вызова
- * ломал).
+ * раз на запись. Найденному по маркеру элементу он не нужен, и сбой чтения базы не имеет права
+ * ломать дозапись колонок существующего элемента (находка ревью).
  *
  * ⚠ «Нет поддержки» бывает ДВУХ видов, и второй ловится только ответом портала. Первый — события не
- * было (ноль в колонке: локальное приложение, установка до этой правки, старая коробка). Второй —
- * событие было, но портал не принимает служебного пользователя ответственным. Замерить это заранее
- * негде, поэтому: портал ОТКАЗАЛ (ответил кодом, и код не из временных) на записи со служебным
- * пользователем → та же запись повторяется на установившем. Повтор безопасен: писатели
- * find-or-create по маркеру, и то, что успело создаться, найдётся, а не задвоится.
+ * было (ноль в колонке: локальное приложение, установка до этой правки). Второй — событие было, но
+ * портал не принимает служебного пользователя ответственным. Замерить это заранее негде, поэтому:
+ * портал ОТКАЗАЛ (ответил кодом, и код не из временных) на записи со служебным пользователем → та же
+ * запись повторяется без поля, то есть на установившем. Повтор безопасен: писатели find-or-create по
+ * маркеру, и то, что успело создаться, найдётся, а не задвоится.
  *
- * ⚠ Отказ запоминается ТОЛЬКО если повтор на установившем прошёл: это и есть доказательство, что
- * мешал именно ответственный (больше между двумя попытками не менялось ничего). Помним недолго
+ * ⚠ Отказ запоминается ТОЛЬКО если повтор прошёл: это и есть доказательство, что мешал именно
+ * ответственный (больше между двумя попытками не менялось ничего). Помним недолго
  * (`SYSTEM_USER_REFUSAL_TTL_MS`), чтобы разовая причина не выключила служебного пользователя до
  * перезапуска.
- *
- * ⚠ Отказ `profile` на запасном пути ПРОБРАСЫВАЕТСЯ (см. `tokenOwnerId`): запись упадёт и будет
- * повторена, а не создаст элемент «на кого придётся» — ответственный ставится только при создании, и
- * неверный остался бы навсегда.
  */
 export async function withElementResponsible<T>(
   memberId: string,
-  call: RestCall,
   deps: { loadSystemUserId: (memberId: string) => Promise<number | null>, now?: () => number },
   write: (responsible: ResponsibleResolver) => Promise<T>
 ): Promise<T> {
   const now = deps.now ?? Date.now
-  const installer: ResponsibleResolver = () => tokenOwnerId(call, memberId, 'assignedById of a smart-process element')
+  const installer: ResponsibleResolver = async () => null
   let systemUserUsed: number | null = null
-  let chosen: Promise<number> | undefined
+  let chosen: Promise<number | null> | undefined
   const primary: ResponsibleResolver = () => {
     chosen ??= (async () => {
-      const refused = (refusedUntil.get(memberId) ?? 0) > now()
-      const systemUser = refused ? null : await deps.loadSystemUserId(memberId)
-      if (systemUser === null) return installer()
-      systemUserUsed = systemUser
-      return systemUser
+      if ((refusedUntil.get(memberId) ?? 0) > now()) return null
+      systemUserUsed = await deps.loadSystemUserId(memberId)
+      return systemUserUsed
     })()
     return chosen
   }

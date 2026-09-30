@@ -34,7 +34,7 @@ function registryDeps(over: Partial<RegistryWriteJobDeps> = {}): RegistryWriteJo
   return {
     resolvePortalCall: async () => ({} as never),
     writePaymentRegistry: async () => '101',
-    withResponsible: async (_memberId, _call, write) => write(async () => 512),
+    withResponsible: async (_memberId, write) => write(async () => 512),
     findActivityId: async () => null,
     bindActivity: async () => ({ bound: 0, failed: 0 }),
     ...over
@@ -52,30 +52,30 @@ describe('дозапись элемента реестра (#578)', () => {
     expect(writePaymentRegistry).toHaveBeenCalledWith(ITEM, '7', 'alfa-by', REGISTRY_JOB.paymentSp, call, expect.any(Function))
   })
 
-  it('ответственный — тот же, что у синхронного пути: спрашивается по порталу задачи и её токену', async () => {
+  it('ответственный — тот же, что у синхронного пути: спрашивается по порталу задачи', async () => {
     // ⚠ Дозапись не имеет права поставить элемент на другого, чем поставил бы обычный прогон:
     // ответственный ставится только при создании, и разойдись пути — элементы одного портала лежали
     // бы на разных людях в зависимости от того, с какой попытки записались.
     const call = { tag: 'rest' } as never
     const seen: unknown[] = []
-    const withResponsible: RegistryWriteJobDeps['withResponsible'] = async (memberId, c, write) => {
-      seen.push([memberId, c])
+    const withResponsible: RegistryWriteJobDeps['withResponsible'] = async (memberId, write) => {
+      seen.push(memberId)
       return write(async () => 77)
     }
     const writePaymentRegistry = vi.fn<RegistryWriteJobDeps['writePaymentRegistry']>(async () => '101')
     await handleRegistryWriteJob(REGISTRY_JOB, registryDeps({ resolvePortalCall: async () => call, withResponsible, writePaymentRegistry }))
-    expect(seen).toEqual([['M1', call]])
+    expect(seen).toEqual(['M1'])
     expect(await writePaymentRegistry.mock.calls[0]![5]!()).toBe(77)
   })
 
   it('не узнали ответственного — задача падает, а не пишет элемент «на кого придётся»', async () => {
     // Ответственный спрашивается внутри записи, только на ветке создания; его отказ — отказ записи.
     await expect(handleRegistryWriteJob(REGISTRY_JOB, registryDeps({
-      withResponsible: async (_m, _c, write) => write(async () => {
-        throw new Error('profile молчит')
+      withResponsible: async (_m, write) => write(async () => {
+        throw new Error('база не ответила')
       }),
       writePaymentRegistry: async (_i, _co, _p, _sp, _call, responsible) => String(await responsible!())
-    }))).rejects.toThrow('profile молчит')
+    }))).rejects.toThrow('база не ответила')
   })
 
   it('нет токена портала — БРОСАЕТ, а не «успех»', async () => {

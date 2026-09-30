@@ -57,9 +57,10 @@ describe('buildDistributionRowAddCall', () => {
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)]).toBe('active')
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]).toBe('pay-key|invoice|39')
   })
-  // Owner's decision 2026-09-29: elements go on the app's system user, else on the installer —
-  // resolved by the caller, the builder only carries it. A value the portal would not send must
-  // not land the row on somebody else: the portal does not validate the field.
+  // Owner's decision 2026-09-29: elements go on the app's system user, else on the installer (no
+  // field — the documented default is the caller). Resolved by the caller, the builder only carries
+  // it. A value the portal would not send must not land the row on somebody else: whether the portal
+  // validates the field on an element is not measured.
   it('carries the responsible when given, and nothing when absent or not a portal user id', () => {
     const fieldsOf = (assignedById?: unknown) => buildDistributionRowAddCall({ ...INPUT, assignedById: assignedById as number }).params.fields as Record<string, unknown>
     expect(fieldsOf(512).assignedById).toBe(512)

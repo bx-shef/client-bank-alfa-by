@@ -212,14 +212,20 @@ async function bindEvents(): Promise<void> {
  * элементы смарт-процессов (решение владельца 2026-09-29), а узнать его id можно только из события.
  *
  * ⚠ BEST-EFFORT и ОТДЕЛЬНО от `bindEvents`: там отказ роняет установку (без `ONAPPINSTALL` сервер
- * портала не узнает), здесь отказ ожидаем — портал, который событие не знает, отвечает
- * `ERROR_EVENT_NOT_FOUND`, и ронять из-за этого установку нельзя: элементы просто останутся на
- * установившем, как и договорено.
+ * портала не узнает), здесь отказ ожидаем — портал, который событие не знает, по документации
+ * ответит `ERROR_EVENT_NOT_FOUND` (не замерено), и ронять из-за этого установку нельзя: элементы
+ * просто останутся на установившем, как и договорено.
  *
- * ⚠ Подписываемся сами, хотя портал обещает обработчик автоматически: автоматический идёт на адрес
- * УСТАНОВКИ, то есть на эту самую страницу, и событие было бы «доставлено» без следа (подробнее —
- * у `B24_SYSTEM_USER_EVENT`).
+ * ⚠ Подписываемся сами, хотя портал обещает обработчик автоматически: куда идёт автоматический, не
+ * сказано, и если на адрес установки, то есть на эту самую страницу, событие было бы «доставлено» без
+ * следа (подробнее — у `B24_SYSTEM_USER_EVENT`).
  */
+/** Отказ подписки — не ошибка установки, а штатный исход на портале без события: пишем, к чему он
+ *  ведёт, а слово «ошибка» не ставим (находка ревью: оно пугало бы на исправной установке). */
+function systemUserUnavailable(portalAnswer: string): string {
+  return `недоступно на этом портале — элементы будут на установившем (ответ портала: ${portalAnswer})`
+}
+
 async function bindSystemUserEvent(): Promise<void> {
   const { unbind, bind } = buildEventBindCalls(initData.value.eventList ?? [], [B24_SYSTEM_USER_EVENT], eventHandlerUrl.value)
   try {
@@ -231,10 +237,10 @@ async function bindSystemUserEvent(): Promise<void> {
       return
     }
     const res = await $b24.actions.v2.call.make({ method: call.method, params: call.params })
-    systemUserEvent.value = res.isSuccess ? 'ok' : `ошибка: ${res.getErrorMessages().join('; ')}`
+    systemUserEvent.value = res.isSuccess ? 'ok' : systemUserUnavailable(res.getErrorMessages().join('; '))
   } catch (error: unknown) {
     log.warning('подписка на событие о служебном пользователе не удалась', { error: String(error) })
-    systemUserEvent.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
+    systemUserEvent.value = systemUserUnavailable(error instanceof Error ? error.message : String(error))
   }
 }
 

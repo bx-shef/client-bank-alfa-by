@@ -231,13 +231,24 @@ describe('#575 writePaymentRegistryViaRest', () => {
     expect(addParams.fields.assignedById).toBe(512)
   })
 
+  it('ответственный не назван (служебного пользователя нет) — поля НЕТ вовсе: портал ставит вызывающего, то есть установившего', async () => {
+    // Документация crm.item.add: assignedById по умолчанию — «идентификатор пользователя, который
+    // вызывает метод». Ноль или пустое значение вместо отсутствия поля могли бы значить другое.
+    const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
+      ? { result: { items: [] } }
+      : { result: { item: { id: '1' } } }))
+    await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, async () => null)
+    const addParams = recorded(call).find(c => c[0] === 'crm.item.add')![1] as { fields: Record<string, unknown> }
+    expect('assignedById' in addParams.fields).toBe(false)
+  })
+
   it('найденному элементу ответственного НЕ переставляем — дописываются только колонки реестра', async () => {
     // Ответственный ставится в момент создания; дозапись колонок не должна тихо переносить уже
     // существующие элементы на другого человека.
     const call: RestCall = vi.fn(async (method: string, _params: Record<string, unknown>) => (method === 'crm.item.list'
       ? { result: { items: [{ id: '42' }] } }
       : { result: { item: {} } }))
-    // И даже НЕ спрашиваем, кого бы поставить: сбой базы или `profile` не имеет права ломать
+    // И даже НЕ спрашиваем, кого бы поставить: сбой чтения базы не имеет права ломать
     // дозапись колонок существующего элемента (находка ревью).
     const responsible = vi.fn(async () => 512)
     await writePaymentRegistryViaRest(op(), null, 'alfa-by', SP, call, responsible)

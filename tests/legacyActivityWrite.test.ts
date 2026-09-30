@@ -2,10 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { StatementItem } from '../app/types/statement'
 import { PortalRestError } from '../server/utils/portalError'
 import {
-  isMethodNotFound, resetCarrierProbe, resetCurrencyCache, resetMarkerProof,
+  isMethodNotFound, resetCarrierProbe, resetCurrencyCache, resetMarkerProof, resetResponsibleCache,
   writeTodoActivityViaRest
 } from '../server/utils/todoActivityWrite'
-import { resetTokenOwnerCache } from '../server/utils/portalTokenOwner'
 
 // Выбор носителя дела (#722): портал без `crm.activity.todo.add` обязан получить системное
 // `crm.activity.add`, а портал с ним — не заметить, что запасной путь вообще существует.
@@ -41,7 +40,7 @@ function legacyPortalCall(seen: string[]) {
 afterEach(() => {
   resetCarrierProbe()
   resetMarkerProof()
-  resetTokenOwnerCache()
+  resetResponsibleCache()
   resetCurrencyCache()
 })
 

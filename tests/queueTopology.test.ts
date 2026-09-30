@@ -149,6 +149,18 @@ describe('job ids (idempotency)', () => {
     // Only memberId + fileHash form the id — same content (hash) dedups regardless of name/bytes.
     expect(parseJobId(pj)).toBe(parseJobId({ ...pj, fileName: 'other.txt', contentBase64: 'BBBB' }))
   })
+
+  it('ONAPPUSERREADY: отпечаток токена в id — подделка с тем же порталом и ts не затеняет настоящую', () => {
+    // Такая заявка может встать в очередь ДО проверки подлинности (установка ещё не записана), а
+    // BullMQ молча оставляет ПЕРВУЮ задачу с данным id (находка ревью #783).
+    const claim = (appTokenHash: string): EventJob => ({ memberId: 'M1', domain: 'd', kind: 'ONAPPUSERREADY', ts: '123', systemUser: { userId: 5, appTokenHash } })
+    const real = eventJobId(claim('a'.repeat(64)))
+    const forged = eventJobId(claim('b'.repeat(64)))
+    expect(real).not.toBe(forged)
+    expect(real).toBe(`evt|M1|ONAPPUSERREADY|123|${'a'.repeat(16)}`)
+    // Установка и удаление — прежние id, байт в байт.
+    expect(eventJobId({ memberId: 'M1', domain: 'd', kind: 'ONAPPUNINSTALL', ts: '123' })).toBe('evt|M1|ONAPPUNINSTALL|123')
+  })
   it('crm-sync id is memberId + batchId (items do not affect it)', () => {
     const base: CrmSyncJob = { memberId: 'M1', providerId: 'alfa-by', source: 'fetch', batchId: 'b1', items: [] }
     expect(crmSyncJobId(base)).toBe('crm|M1|b1')

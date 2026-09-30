@@ -61,11 +61,13 @@ describe('producer retention wiring', () => {
   })
 
   it('ONAPPUSERREADY waits for the install with its own retries, and keeps retention + jobId', async () => {
-    // The event often arrives before the install is persisted, and only the install's stored token
+    // The event may arrive before the install is persisted, and only the install's stored token
     // can authenticate it — so the consumer retries until it is there (≈2.5 min, see producers.ts).
     await enqueueEvent({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 5, appTokenHash: 'h' } })
     const opts = optsFor('b24-events')!
     expect(opts).toMatchObject({ ...CREDENTIAL_JOB_RETENTION, ...SYSTEM_USER_RETRY_OPTS })
+    // Second line behind the shape checks: BullMQ refuses an oversized payload instead of storing it.
+    expect(opts.sizeLimit).toBeGreaterThan(0)
     expect(opts).toHaveProperty('jobId')
     const { attempts, backoff } = SYSTEM_USER_RETRY_OPTS
     let total = 0

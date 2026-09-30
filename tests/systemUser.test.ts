@@ -4,7 +4,6 @@ import {
   admitDeferredClaim, applicationTokenHash, applySystemUserClaim, MAX_DEFERRED_CLAIMS_PER_MINUTE,
   resetSystemUserRefusals, SYSTEM_USER_REFUSAL_TTL_MS, SystemUserPendingError, withElementResponsible
 } from '../server/utils/systemUser'
-import { resetTokenOwnerCache } from '../server/utils/portalTokenOwner'
 import { PortalRestError } from '../server/utils/portalError'
 
 // Служебный пользователь приложения (ONAPPUSERREADY): сверка в воркере и выбор ответственного
@@ -21,7 +20,6 @@ function deps(stored: string, rowExists = true) {
 }
 
 afterEach(() => {
-  resetTokenOwnerCache()
   resetSystemUserRefusals()
 })
 
@@ -46,7 +44,7 @@ describe('applySystemUserClaim — сверка ВСЕГДА по токену, 
   })
 
   it('установка ещё не записана — ПОВТОРИТЬ (исключение), а не отказать', async () => {
-    // Событие приходит вместе с установкой и часто раньше её записи; онлайн-события портал не
+    // Событие приходит по завершении установки и может опередить её запись; онлайн-события портал не
     // повторяет, так что отказ здесь терял бы служебного пользователя навсегда. Тот же путь чинит и
     // удаление с мгновенной переустановкой: строки на миг нет, потом она есть с тем же токеном.
     const d = deps('')
@@ -69,92 +67,105 @@ describe('applySystemUserClaim — сверка ВСЕГДА по токену, 
   })
 })
 
-describe('withElementResponsible — служебный пользователь, иначе установивший', () => {
-  const profileCall = (id = '7') => vi.fn(async (method: string) => (method === 'profile' ? { result: { ID: id } } : {}))
+describe('withElementResponsible — служебный пользователь, иначе установивший (поле не передаём)', () => {
   const refusal = (code: string) => new PortalRestError('portal said no', code, 'crm.item.add')
+  type R = () => Promise<number | null>
 
-  it('служебный пользователь известен — он, и profile не спрашиваем вовсе', async () => {
-    const call = profileCall()
-    expect(await withElementResponsible('M', call, { loadSystemUserId: async () => 512 }, r => r())).toBe(512)
-    expect(call).not.toHaveBeenCalled()
+  it('служебный пользователь известен — он', async () => {
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, r => r())).toBe(512)
   })
 
-  it('не известен — владелец сохранённого токена (profile → ID), один вызов на портал', async () => {
-    const call = profileCall('7')
-    const load = { loadSystemUserId: async () => null }
-    expect(await withElementResponsible('M', call, load, r => r())).toBe(7)
-    expect(await withElementResponsible('M', call, load, r => r())).toBe(7)
-    expect(call).toHaveBeenCalledTimes(1)
+  it('не известен — null: поле не передаём, и по документации crm.item.add ответственным станет вызывающий, то есть установивший', async () => {
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => null }, r => r())).toBeNull()
   })
 
-  it('ЛЕНИВО: запись, которой не пришлось создавать элемент, не читает ни базу, ни profile', async () => {
+  it('ЛЕНИВО: запись, которой не пришлось создавать элемент, базу не читает', async () => {
     const loadSystemUserId = vi.fn(async () => 512)
-    const call = profileCall()
-    expect(await withElementResponsible('M', call, { loadSystemUserId }, async () => 'found')).toBe('found')
+    expect(await withElementResponsible('M', { loadSystemUserId }, async () => 'found')).toBe('found')
     expect(loadSystemUserId).not.toHaveBeenCalled()
-    expect(call).not.toHaveBeenCalled()
   })
 
   it('на одну запись — одно чтение, сколько бы элементов она ни создала', async () => {
     const loadSystemUserId = vi.fn(async () => 512)
-    const ids = await withElementResponsible('M', profileCall(), { loadSystemUserId }, async r => [await r(), await r()])
+    const ids = await withElementResponsible('M', { loadSystemUserId }, async r => [await r(), await r()])
     expect(ids).toEqual([512, 512])
     expect(loadSystemUserId).toHaveBeenCalledTimes(1)
   })
 
-  it('портал ОТКАЗАЛ служебному пользователю — та же запись повторяется на установившем', async () => {
+  it('портал ОТКАЗАЛ служебному пользователю — та же запись повторяется без поля, то есть на установившем', async () => {
     // «Там, где нет такой поддержки, — установивший»: второй вид «нет поддержки» ловится только ответом.
-    const seen: number[] = []
-    const write = async (r: () => Promise<number>) => {
+    const seen: (number | null)[] = []
+    const write = async (r: R) => {
       const id = await r()
       seen.push(id)
       if (id === 512) throw refusal('INVALID_ARG_VALUE')
       return 'ok'
     }
-    expect(await withElementResponsible('M', profileCall('7'), { loadSystemUserId: async () => 512 }, write)).toBe('ok')
-    expect(seen).toEqual([512, 7])
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).toBe('ok')
+    expect(seen).toEqual([512, null])
   })
 
-  it('после удачного повтора портал помнится недолго: следующие записи сразу на установившего', async () => {
+  it('служебного пользователя НЕ БЫЛО, а портал отказал — повтора нет: запись и так шла на установившего', async () => {
+    const write = vi.fn(async (r: R) => {
+      await r()
+      throw refusal('ACCESS_DENIED')
+    })
+    await expect(withElementResponsible('M', { loadSystemUserId: async () => null }, write)).rejects.toThrow('portal said no')
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('после удачного повтора портал помнится недолго: следующие записи сразу на установившего, без чтения базы', async () => {
     let t = 1_000_000
     const now = () => t
     const loadSystemUserId = vi.fn(async () => 512)
-    const write = async (r: () => Promise<number>) => {
+    const write = async (r: R) => {
       const id = await r()
       if (id === 512) throw refusal('ACCESS_DENIED')
       return id
     }
-    await withElementResponsible('M', profileCall('7'), { loadSystemUserId, now }, write)
-    expect(await withElementResponsible('M', profileCall('7'), { loadSystemUserId, now }, r => r())).toBe(7)
+    await withElementResponsible('M', { loadSystemUserId, now }, write)
+    expect(loadSystemUserId).toHaveBeenCalledTimes(1)
+    expect(await withElementResponsible('M', { loadSystemUserId, now }, r => r())).toBeNull()
+    expect(loadSystemUserId).toHaveBeenCalledTimes(1)
     t += SYSTEM_USER_REFUSAL_TTL_MS + 1
-    expect(await withElementResponsible('M', profileCall('7'), { loadSystemUserId, now }, r => r())).toBe(512)
+    expect(await withElementResponsible('M', { loadSystemUserId, now }, r => r())).toBe(512)
+  })
+
+  it('память об отказе — на ПОРТАЛ: соседний портал по-прежнему идёт на своего служебного пользователя', async () => {
+    const write = async (r: R) => {
+      const id = await r()
+      if (id === 512) throw refusal('ACCESS_DENIED')
+      return id
+    }
+    await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)
+    expect(await withElementResponsible('OTHER', { loadSystemUserId: async () => 512 }, r => r())).toBe(512)
   })
 
   it('повтор на установившем ТОЖЕ упал — значит мешал не ответственный: ошибка наружу, отказ не помним', async () => {
-    const write = async (r: () => Promise<number>) => {
+    const write = async (r: R) => {
       await r()
       throw refusal('INVALID_ARG_VALUE')
     }
-    await expect(withElementResponsible('M', profileCall('7'), { loadSystemUserId: async () => 512 }, write)).rejects.toThrow('portal said no')
-    expect(await withElementResponsible('M', profileCall('7'), { loadSystemUserId: async () => 512 }, r => r())).toBe(512)
+    await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow('portal said no')
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, r => r())).toBe(512)
   })
 
   it.each([['QUERY_LIMIT_EXCEEDED'], ['INTERNAL_SERVER_ERROR'], ['expired_token']])(
     'временный отказ портала (%s) — не повод ставить на установившего: повторит сама задача', async (code) => {
-      const write = vi.fn(async (r: () => Promise<number>) => {
+      const write = vi.fn(async (r: R) => {
         await r()
         throw refusal(code)
       })
-      await expect(withElementResponsible('M', profileCall(), { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
+      await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
       expect(write).toHaveBeenCalledTimes(1)
     })
 
   it('сетевой сбой (кода нет) — тоже без повтора на установившем', async () => {
-    const write = vi.fn(async (r: () => Promise<number>) => {
+    const write = vi.fn(async (r: R) => {
       await r()
       throw new Error('ECONNRESET')
     })
-    await expect(withElementResponsible('M', profileCall(), { loadSystemUserId: async () => 512 }, write)).rejects.toThrow('ECONNRESET')
+    await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow('ECONNRESET')
     expect(write).toHaveBeenCalledTimes(1)
   })
 
@@ -162,29 +173,35 @@ describe('withElementResponsible — служебный пользователь
     const write = vi.fn(async () => {
       throw refusal('ACCESS_DENIED')
     })
-    await expect(withElementResponsible('M', profileCall(), { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
+    await expect(withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).rejects.toThrow()
     expect(write).toHaveBeenCalledTimes(1)
   })
 
-  it('портал не назвал владельца — БРОСАЕТ, а не ставит элемент «на кого придётся»', async () => {
-    const call = vi.fn(async () => ({ result: {} }))
-    await expect(withElementResponsible('M', call, { loadSystemUserId: async () => null }, r => r()))
-      .rejects.toThrow(/assignedById of a smart-process element/)
-  })
-
   it('записанный новый служебный пользователь снимает память об отказе', async () => {
-    const write = async (r: () => Promise<number>) => {
+    const write = async (r: R) => {
       const id = await r()
       if (id === 512) throw refusal('ACCESS_DENIED')
       return id
     }
-    await withElementResponsible('M', profileCall('7'), { loadSystemUserId: async () => 512 }, write)
+    await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)
     await applySystemUserClaim({ memberId: 'M', userId: 600, appTokenHash: HASH }, deps(TOKEN), { finalAttempt: false })
-    expect(await withElementResponsible('M', profileCall('7'), { loadSystemUserId: async () => 600 }, r => r())).toBe(600)
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 600 }, r => r())).toBe(600)
+  })
+})
+
+describe('SystemUserPendingError — в тексте хеш портала, а не member_id', () => {
+  it('непроверенный member_id не попадает в строку лога падений задачи', () => {
+    const e = new SystemUserPendingError('abc123member')
+    expect(e.message).not.toContain('abc123member')
   })
 })
 
 describe('admitDeferredClaim — потолок несверенных заявок на весь сервис', () => {
+  it('Redis не отвечает (ждёт, а не отказывает) — ДЕДЛАЙН, а не висящий запрос', async () => {
+    const never = () => new Promise<number>(() => {})
+    await expect(admitDeferredClaim(never, 0, 20)).rejects.toThrow(/deadline/)
+  })
+
   function counter() {
     const counts = new Map<string, number>()
     const calls: Array<[string, number]> = []
