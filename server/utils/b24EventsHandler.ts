@@ -204,6 +204,10 @@ export interface B24RequestDeps extends B24EventDeps {
   deletePortal: (memberId: string, eventTs: number) => Promise<void>
   /** Fallback: record a VERIFIED system user synchronously (queue unavailable). UPDATE-only. */
   saveSystemUser: (memberId: string, userId: number) => Promise<void>
+  /** Admit one more UNVERIFIED system-user claim into the queue (a service-wide per-minute cap,
+   *  `admitDeferredClaim`). The only path where an unauthenticated event reaches the queue — see
+   *  `MAX_DEFERRED_CLAIMS_PER_MINUTE`. May throw (Redis down) — treated as «not admitted». */
+  admitDeferredClaim: () => Promise<boolean>
   /** AES-GCM encrypt for the refresh token carried in the queued job (never plain in Redis). */
   encrypt: (plain: string) => string
   /** Current epoch ms — injected so tests are deterministic. */
@@ -309,6 +313,19 @@ export async function handleEventRequest(payload: unknown, deps: B24RequestDeps)
   // nothing to resurrect), an unverified one cannot be checked later by anybody and is dropped. The
   // loss is soft by design: elements stay on the installer, as on a portal that never sent the event.
   if (action.type === 'system-user') {
+    if (action.appTokenHash !== undefined) {
+      // UNverified claim — capped, or a flood of forgeries with made-up portals would become a flood
+      // of jobs in the very queue that carries installs. Refused ⇒ lost softly (installer stays).
+      let admitted = false
+      try {
+        admitted = await deps.admitDeferredClaim()
+      } catch {
+        // Redis down — the claim could not be queued anyway.
+      }
+      if (!admitted) {
+        return { status: 503, body: { error: 'system user: deferred verification refused' }, outcome: 'none' }
+      }
+    }
     const sysJob: EventJob = {
       memberId: action.memberId,
       domain,

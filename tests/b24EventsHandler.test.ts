@@ -120,6 +120,7 @@ function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
     saveCredentials: vi.fn(async () => {}),
     deletePortal: vi.fn(async () => {}),
     saveSystemUser: vi.fn(async () => {}),
+    admitDeferredClaim: vi.fn(async () => true),
     encrypt: vi.fn((s: string) => `enc(${s})`),
     now: () => NOW,
     ...over
@@ -418,6 +419,33 @@ describe('ONAPPUSERREADY (system user)', () => {
     expect(wire).not.toContain(APP_TOKEN) // the app token authenticates uninstalls — not for Redis
     expect(wire).not.toContain('SYS_R') // nor the system user's own long-lived authorization
     expect(wire).not.toContain('SYS_A')
+  })
+
+  it('an UNverified claim over the service-wide cap is refused (503) and never queued', async () => {
+    // The only path where an unauthenticated event reaches the queue — without the cap a flood of
+    // forgeries with made-up portals would become a flood of jobs in the queue that carries installs.
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => ''), admitDeferredClaim: vi.fn(async () => false) })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.status).toBe(503)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('cap unreadable (Redis down) counts as refused, not as a crash', async () => {
+    const deps = makeReqDeps({
+      loadStoredToken: vi.fn(async () => ''),
+      admitDeferredClaim: vi.fn(async () => Promise.reject(new Error('ECONNREFUSED')))
+    })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.status).toBe(503)
+    expect(deps.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('a VERIFIED claim does not consume the cap — it is authentic already', async () => {
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
+    await handleEventRequest(userReady, deps)
+    expect(deps.admitDeferredClaim).not.toHaveBeenCalled()
+    expect(deps.enqueue).toHaveBeenCalled()
   })
 
   it('queue down + verified claim: written synchronously (UPDATE-only on the store side)', async () => {

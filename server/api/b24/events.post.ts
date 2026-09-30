@@ -13,6 +13,8 @@ import { getApplicationToken, saveToken, setSystemUserId } from '../../utils/tok
 import { LIVE_PORTAL_PURGE_DEPS, portalPurgeReasonText, purgePortalStorage } from '../../utils/portalPurge'
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
+import { incrementWithTtl } from '../../queue/connection'
+import { admitDeferredClaim } from '../../utils/systemUser'
 import { rawOauthRefresh, verifyInstallMember, type OAuthFetchFn } from '../../utils/verifyInstallMember'
 import { useServerLogger } from '../../utils/serverLogger'
 import { portalHash } from '../../utils/telemetryAttributes'
@@ -76,6 +78,7 @@ export default defineEventHandler(async (event) => {
       saveSystemUser: async (memberId, userId) => {
         await setSystemUserId(dbQuery, memberId, userId)
       },
+      admitDeferredClaim: () => admitDeferredClaim(incrementWithTtl, Date.now()),
       encrypt: encryptSecret,
       now: () => Date.now(),
       bindInstallMember

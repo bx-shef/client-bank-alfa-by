@@ -1,6 +1,6 @@
 # Очереди обработки (BullMQ + Redis)
 
-> Last reviewed: 2026-09-29
+> Last reviewed: 2026-09-30
 
 Справка по шине очередей backend'а: какие очереди, что несут, как соединены и где брать
 метрики для визуализации. Код — `server/queue/*`; решение и статус в дорожной карте —
@@ -20,7 +20,7 @@
 
 | Очередь | Константа | Payload | Кто кладёт | Обработчик делает |
 |---|---|---|---|---|
-| `b24-events` | `Q_EVENTS` | `EventJob` (`memberId`, `domain`, `kind`, `ts`) | вебхук `POST /api/b24/events` | follow-up после проверенного события; на `ONAPPUNINSTALL` — очистка портала |
+| `b24-events` | `Q_EVENTS` | `EventJob` (`memberId`, `domain`, `kind`, `ts`) | вебхук `POST /api/b24/events` | follow-up после проверенного события; на `ONAPPUNINSTALL` — очистка портала; на `ONAPPUSERREADY` — id служебного пользователя (сверка отложена, если установка ещё не записана: свои повторы `SYSTEM_USER_RETRY_OPTS`, ≈2,5 мин, в Redis — отпечаток токена, не токен; `B24_EVENTS.md`) |
 | `bank-fetch` | `Q_FETCH` | `FetchJob` (`memberId`, `providerId`, `account`, `dateFrom/To`) | крон (`planFetches`) / демо-нагрузка | тянет окно выписки у банка (Альфа/Приор) → нормализует → кладёт батч в `crm-sync` |
 | `bank-fetch-prior` | `Q_FETCH_PRIOR` | `FetchJob` (тот же) | крон (`fetchQueueFor`, provider=`prior-by`) | то же для Приора, но **своя** очередь: бюджет в ЗАПРОСАХ (задача ≈ 11 HTTP: resolve + create + опросы + обход страниц) и свои слоты (`QUEUE_PRIOR_CONCURRENCY`), поэтому длинный create+poll не блокирует Альфу и не тратит её лимит |
 | `file-parse` | `Q_PARSE` | `ParseJob` (`memberId`, `providerId`, `fileName`, `contentBase64`, `fileHash`, `userId?`) | эндпоинт `POST /api/import` (ручная загрузка) | декодирует (windows-1251) и разбирает файл → нормализует → кладёт батч в `crm-sync` |

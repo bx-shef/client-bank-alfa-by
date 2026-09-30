@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  applicationTokenHash, applySystemUserClaim, elementResponsibleId, SystemUserPendingError
+  admitDeferredClaim, applicationTokenHash, applySystemUserClaim, elementResponsibleId,
+  MAX_DEFERRED_CLAIMS_PER_MINUTE, SystemUserPendingError
 } from '../server/utils/systemUser'
 import { resetTokenOwnerCache } from '../server/utils/portalTokenOwner'
 
@@ -90,5 +91,35 @@ describe('elementResponsibleId — служебный пользователь, 
     const call = vi.fn(async () => ({ result: {} }))
     await expect(elementResponsibleId('M', call, { loadSystemUserId: async () => null }))
       .rejects.toThrow(/assignedById of a smart-process element/)
+  })
+})
+
+describe('admitDeferredClaim — потолок несверенных заявок на весь сервис', () => {
+  function counter() {
+    const counts = new Map<string, number>()
+    const calls: Array<[string, number]> = []
+    const incr = vi.fn(async (key: string, ttl: number) => {
+      calls.push([key, ttl])
+      const n = (counts.get(key) ?? 0) + 1
+      counts.set(key, n)
+      return n
+    })
+    return { incr, calls }
+  }
+
+  it('пускает до потолка включительно, дальше — нет', async () => {
+    const { incr } = counter()
+    const verdicts: boolean[] = []
+    for (let i = 0; i < MAX_DEFERRED_CLAIMS_PER_MINUTE + 2; i++) verdicts.push(await admitDeferredClaim(incr, 60_000 * 100))
+    expect(verdicts.filter(Boolean)).toHaveLength(MAX_DEFERRED_CLAIMS_PER_MINUTE)
+    expect(verdicts.at(-1)).toBe(false)
+  })
+
+  it('окно — минута: в следующую счёт идёт заново, а ключ живёт дольше окна', async () => {
+    const { incr, calls } = counter()
+    for (let i = 0; i < MAX_DEFERRED_CLAIMS_PER_MINUTE; i++) await admitDeferredClaim(incr, 60_000 * 100)
+    expect(await admitDeferredClaim(incr, 60_000 * 101)).toBe(true)
+    expect(new Set(calls.map(c => c[0])).size).toBe(2)
+    expect(calls.every(([, ttl]) => ttl > 60)).toBe(true) // ключ переживает своё окно, иначе счёт сбросился бы раньше
   })
 })

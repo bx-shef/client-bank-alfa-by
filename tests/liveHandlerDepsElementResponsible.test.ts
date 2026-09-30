@@ -66,18 +66,18 @@ const responsibles = () => h.sent.filter(s => s.method === 'crm.item.add').map(s
 
 describe('ответственный новых элементов в liveHandlerDeps', () => {
   it('служебный пользователь известен — на него все четыре пути, portal profile не спрашиваем', async () => {
-    await deps.writePaymentRegistry(ITEM, null, 'SYS', 'alfa-by', SPS.paymentSp)
-    await deps.backfillRegistry({ ...ITEM, docId: 'D2' }, null, 'SYS', 'alfa-by', SPS.paymentSp)
-    await deps.writeLedger({ ...ITEM, docId: 'D3' }, INVOICE, '12', 'SYS', SPS)
-    await deps.writeTriggerFact({ ...ITEM, docId: 'D4' }, DEAL, '12', 'SYS', SPS)
+    await deps.writePaymentRegistry!(ITEM, null, 'SYS', 'alfa-by', SPS.paymentSp)
+    await deps.backfillRegistry!({ ...ITEM, docId: 'D2' }, null, 'SYS', 'alfa-by', SPS.paymentSp)
+    await deps.writeLedger!({ ...ITEM, docId: 'D3' }, INVOICE, '12', 'SYS', SPS)
+    await deps.writeTriggerFact!({ ...ITEM, docId: 'D4' }, DEAL, '12', 'SYS', SPS)
     // реестр 1 + дозапись 1 + разнесение 2 (элемент + строка) + триггер 2
     expect(responsibles()).toEqual([512, 512, 512, 512, 512, 512])
     expect(h.sent.some(s => s.method === 'profile')).toBe(false)
   })
 
   it('служебного пользователя нет — установивший (владелец токена), один profile на портал', async () => {
-    await deps.writePaymentRegistry(ITEM, null, 'NOSYS', 'alfa-by', SPS.paymentSp)
-    await deps.writeLedger({ ...ITEM, docId: 'D3' }, INVOICE, '12', 'NOSYS', SPS)
+    await deps.writePaymentRegistry!(ITEM, null, 'NOSYS', 'alfa-by', SPS.paymentSp)
+    await deps.writeLedger!({ ...ITEM, docId: 'D3' }, INVOICE, '12', 'NOSYS', SPS)
     expect(responsibles()).toEqual([3, 3, 3])
     expect(h.sent.filter(s => s.method === 'profile')).toHaveLength(1)
   })
