@@ -256,6 +256,32 @@ describe('install.vue — inside a B24 frame', () => {
     expect(wrapper.text()).toContain('подписаться не удалось')
   })
 
+  // ⚠ Настоящий SDK возвращает неуспешный результат только для своих «мягких» кодов, а всё остальное —
+  // и ERROR_EVENT_NOT_FOUND тоже — БРОСАЕТ (`abstract-http.mjs`). То есть на живом портале текст
+  // приходит из ветки `catch`, и тесты выше, мокающие неуспешный результат, её не проходят (QA-ревью #783).
+  const throwOnSystemUserBind = (error: unknown) => callSpy.mockImplementation(async (arg?: unknown) => {
+    if ((arg as BindArg)?.params?.event === 'ONAPPUSERREADY') throw error
+    return { isSuccess: true, getData: () => ({ result: true }), getErrorMessages: () => [] as string[] }
+  })
+
+  it('ERROR_EVENT_NOT_FOUND БРОШЕН ошибкой SDK — «недоступно на этом портале», установка завершается', async () => {
+    throwOnSystemUserBind(Object.assign(new Error('Описание на языке портала'), { code: 'ERROR_EVENT_NOT_FOUND' }))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('недоступно на этом портале')
+    expect(wrapper.text()).not.toContain('подписаться не удалось')
+  })
+
+  it('брошен ДРУГОЙ код — «подписаться не удалось», а не «недоступно на этом портале»', async () => {
+    throwOnSystemUserBind(Object.assign(new Error('Доступ запрещён'), { code: 'ACCESS_DENIED' }))
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('подписаться не удалось')
+    expect(wrapper.text()).not.toContain('недоступно на этом портале')
+  })
+
   it('ЧУЖОЙ обработчик события не снимается — свой ставится рядом (находка ревью #783)', async () => {
     // Чужим может оказаться автоматический обработчик портала; снятие ничего не даёт, а лишняя
     // доставка безвредна.

@@ -59,8 +59,10 @@ export const SYSTEM_USER_RETRY_OPTS = {
   delay: 3_000,
   backoff: { type: 'exponential' as const, delay: 5_000 },
   // Second line behind the shape checks of `parseSystemUserEvent`: this job may be queued before it
-  // is authenticated, and BullMQ refuses a payload over the limit instead of storing it.
-  sizeLimit: 1024
+  // is authenticated, and BullMQ refuses a payload over the limit instead of storing it. Sized to the
+  // LARGEST claim the parser admits (a 253-code-point domain of 4-byte characters ≈ 1.3 KB): 1024 B
+  // silently refused some claims the parser had just accepted (found in review of #783).
+  sizeLimit: 2048
 } as const
 
 /** True if the job was enqueued; false if the queue is disabled (no Redis). */

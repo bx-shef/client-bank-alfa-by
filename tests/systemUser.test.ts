@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  admitDeferredClaim, applySystemUserClaim, MAX_DEFERRED_CLAIMS_PER_MINUTE,
+  ADMIT_DEADLINE_MS, admitDeferredClaim, applySystemUserClaim, MAX_DEFERRED_CLAIMS_PER_MINUTE,
   resetSystemUserRefusals, SYSTEM_USER_REFUSAL_TTL_MS, SystemUserPendingError, withElementResponsible
 } from '../server/utils/systemUser'
 import { applicationTokenHash } from '../server/utils/appTokenHash'
@@ -22,7 +22,18 @@ function deps(stored: string, rowExists = true) {
 
 afterEach(() => {
   resetSystemUserRefusals()
+  vi.useRealTimers()
 })
+
+/** Перехват журнала: серверный логгер пишет в stdout синхронно (см. `serverLogger.ts`). */
+function captureLog() {
+  const chunks: string[] = []
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+    chunks.push(String(c))
+    return true
+  })
+  return { text: () => chunks.join(''), restore: () => spy.mockRestore() }
+}
 
 describe('applicationTokenHash', () => {
   it('sha256 в hex — то, с чем сверяет воркер, и не сам токен', () => {
@@ -62,6 +73,29 @@ describe('applySystemUserClaim — сверка ВСЕГДА по токену, 
     expect(d.setSystemUserId).not.toHaveBeenCalled()
   })
 
+  it('токен читается ИМЕННО портала заявки, а не чей-то ещё', async () => {
+    const d = deps(TOKEN)
+    await applySystemUserClaim({ memberId: 'M-42', userId: 512, appTokenHash: HASH }, d, { finalAttempt: false })
+    expect(d.loadApplicationToken).toHaveBeenCalledWith('M-42')
+  })
+
+  it('пустой отпечаток — не сверенная заявка: mismatch, в базу ничего', async () => {
+    const d = deps(TOKEN)
+    expect(await applySystemUserClaim({ memberId: 'M', userId: 512, appTokenHash: '' }, d, { finalAttempt: false })).toBe('mismatch')
+    expect(d.setSystemUserId).not.toHaveBeenCalled()
+  })
+
+  it('установки нет и на последней попытке — в журнале хеш портала, а не member_id непроверенной заявки', async () => {
+    const log = captureLog()
+    try {
+      expect(await applySystemUserClaim({ memberId: 'SECRET-MEMBER', userId: 512, appTokenHash: HASH }, deps(''), { finalAttempt: true })).toBe('expired')
+    } finally {
+      log.restore()
+    }
+    expect(log.text()).toContain('служебный пользователь НЕ записан')
+    expect(log.text()).not.toContain('SECRET-MEMBER')
+  })
+
   it('портала у нас уже нет — gone, без ошибки', async () => {
     const d = deps(TOKEN, false)
     expect(await applySystemUserClaim({ memberId: 'M', userId: 512, appTokenHash: HASH }, d, { finalAttempt: false })).toBe('gone')
@@ -78,6 +112,28 @@ describe('withElementResponsible — служебный пользователь
 
   it('не известен — null: поле не передаём, и по документации crm.item.add ответственным станет вызывающий, то есть установивший', async () => {
     expect(await withElementResponsible('M', { loadSystemUserId: async () => null }, r => r())).toBeNull()
+  })
+
+  it('сбой чтения служебного пользователя из базы — наружу, без повтора на установившем', async () => {
+    // Иначе упавшая база молча превращалась бы в «пишем на установившего» вместо повтора задачи.
+    const write = vi.fn(async (r: R) => r())
+    const brokenLoader = async (): Promise<number | null> => {
+      throw new Error('db down')
+    }
+    await expect(withElementResponsible('M', { loadSystemUserId: brokenLoader }, write)).rejects.toThrow('db down')
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('код отказа в нижнем регистре распознаётся так же', async () => {
+    const seen: (number | null)[] = []
+    const write = async (r: R) => {
+      const id = await r()
+      seen.push(id)
+      if (id === 512) throw new PortalRestError('portal said no', 'access_denied', 'crm.item.add')
+      return 'ok'
+    }
+    expect(await withElementResponsible('M', { loadSystemUserId: async () => 512 }, write)).toBe('ok')
+    expect(seen).toEqual([512, null])
   })
 
   it('ЛЕНИВО: запись, которой не пришлось создавать элемент, базу не читает', async () => {
@@ -242,9 +298,37 @@ describe('SystemUserPendingError — в тексте хеш портала, а �
 })
 
 describe('admitDeferredClaim — потолок несверенных заявок на весь сервис', () => {
-  it('Redis не отвечает (ждёт, а не отказывает) — ДЕДЛАЙН, а не висящий запрос', async () => {
-    const never = () => new Promise<number>(() => {})
-    await expect(admitDeferredClaim(never, 0, 20)).rejects.toThrow(/deadline/)
+  const never = () => new Promise<number>(() => {})
+
+  it('Redis не отвечает (ждёт, а не отказывает) — ДЕДЛАЙН, а не висящий запрос; действует переданный срок', async () => {
+    vi.useFakeTimers()
+    const verdict = admitDeferredClaim(never, 0, 20).catch((e: Error) => e.message)
+    await vi.advanceTimersByTimeAsync(21)
+    expect(await verdict).toMatch(/deadline/)
+    expect(ADMIT_DEADLINE_MS).toBeGreaterThan(21) // иначе переданный срок неотличим от умолчания
+  })
+
+  it('срок по умолчанию — секунды: молчащий Redis отвергается, а не висит до таймаута nginx', async () => {
+    vi.useFakeTimers()
+    let settled = false
+    const verdict = admitDeferredClaim(never, 0).catch(() => 'rejected').finally(() => {
+      settled = true
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(settled).toBe(true)
+    expect(await verdict).toBe('rejected')
+  })
+
+  it('таймер дедлайна снимается, как только Redis ответил', async () => {
+    vi.useFakeTimers()
+    await admitDeferredClaim(async () => 1, 0, 1000)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('потолок — десятки заявок в минуту, а не тысячи', () => {
+    // Остальные тесты берут константу как есть и не заметили бы 30 → 3000.
+    expect(MAX_DEFERRED_CLAIMS_PER_MINUTE).toBeGreaterThanOrEqual(1)
+    expect(MAX_DEFERRED_CLAIMS_PER_MINUTE).toBeLessThanOrEqual(100)
   })
 
   function counter() {
@@ -265,6 +349,26 @@ describe('admitDeferredClaim — потолок несверенных заяв�
     for (let i = 0; i < MAX_DEFERRED_CLAIMS_PER_MINUTE + 2; i++) verdicts.push(await admitDeferredClaim(incr, 60_000 * 100))
     expect(verdicts.filter(Boolean)).toHaveLength(MAX_DEFERRED_CLAIMS_PER_MINUTE)
     expect(verdicts.at(-1)).toBe(false)
+  })
+
+  it('все вызовы внутри одной минуты бьют в ОДИН счётчик, в любую её миллисекунду', async () => {
+    const { incr, calls } = counter()
+    await admitDeferredClaim(incr, 60_000 * 100 + 1)
+    await admitDeferredClaim(incr, 60_000 * 100 + 59_999)
+    await admitDeferredClaim(incr, 60_000 * 101)
+    expect(calls[0]![0]).toBe(calls[1]![0])
+    expect(calls[2]![0]).not.toBe(calls[0]![0])
+  })
+
+  it('предупреждение о потолке — ОДНО на минуту, а не строка на каждую подделку', async () => {
+    const { incr } = counter()
+    const log = captureLog()
+    try {
+      for (let i = 0; i < MAX_DEFERRED_CLAIMS_PER_MINUTE + 5; i++) await admitDeferredClaim(incr, 0)
+    } finally {
+      log.restore()
+    }
+    expect(log.text().match(/несверенных заявок/g)).toHaveLength(1)
   })
 
   it('окно — минута: в следующую счёт идёт заново, а ключ живёт дольше окна', async () => {

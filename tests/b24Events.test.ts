@@ -171,6 +171,9 @@ describe('parseUninstallEvent', () => {
   })
 })
 
+/** A system-user payload whose fields a test may overwrite. */
+type Corruptible = { auth: Record<string, unknown>, data: Record<string, unknown> } & Record<string, unknown>
+
 describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
   // Shape from the official doc (common/events/on-app-user-ready) as it arrives on the wire:
   // form-encoded, so every leaf is a string.
@@ -218,7 +221,13 @@ describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
     ['application_token', 'tok\r\nX'],
     ['domain', 'evil.example\n[auth] ERROR: fake'],
     ['domain', 'a b'],
-    ['domain', 'a'.repeat(254)]
+    ['domain', 'a'.repeat(254)],
+    // Control characters beyond whitespace — what `\p{Cc}` is there for: an ANSI escape could repaint
+    // a terminal reading the log, NUL/DEL/C1 are no part of any host name.
+    ['domain', 'host\u001b[31mred'],
+    ['domain', 'a\u0000b'],
+    ['domain', 'a\u007fb'],
+    ['domain', 'a\u0085b']
   ])('rejects a malformed auth.%s before anything looks at it', (field, value) => {
     const p = payload() as { auth: Record<string, unknown> }
     p.auth[field] = value
@@ -235,6 +244,26 @@ describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
     const p = payload() as { auth: Record<string, unknown> }
     p.auth.member_id = 'SECRET-LOOKING-VALUE\n'
     expect(() => parseSystemUserEvent(p)).toThrow(/^(?!.*SECRET-LOOKING-VALUE).*$/s)
+  })
+
+  // Since the handler returns the parser's message to the sender (`reason` of the 400), no rejection
+  // may echo a value from the unauthenticated request — for EVERY field, not only member_id.
+  it.each([
+    ['auth.application_token', (p: Corruptible) => { p.auth.application_token = 'tok\r\nLEAKME' }],
+    ['auth.domain', (p: Corruptible) => { p.auth.domain = 'evil.example\nLEAKME' }],
+    ['ts', (p: Corruptible) => { p.ts = 'LEAKME' }],
+    ['data.member_id', (p: Corruptible) => { p.data.member_id = 'LEAKME' }]
+  ])('a rejection on %s does not echo the value', (_field, corrupt) => {
+    const p = payload() as Corruptible
+    corrupt(p)
+    let message = ''
+    try {
+      parseSystemUserEvent(p)
+    } catch (e) {
+      message = (e as Error).message
+    }
+    expect(message).not.toBe('') // rejected at all
+    expect(message).not.toContain('LEAKME')
   })
 
   it.each([
@@ -265,11 +294,16 @@ describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
   it('rejects a missing data block, a missing app token and a different event', () => {
     const noData = payload() as Record<string, unknown>
     delete noData.data
-    expect(() => parseSystemUserEvent(noData)).toThrow(/data/)
+    // Named as such — a bare /data/ would also match the «data.user_id …» message.
+    expect(() => parseSystemUserEvent(noData)).toThrow(/missing data/)
     const noToken = payload() as { auth: Record<string, unknown> }
     delete noToken.auth.application_token
     expect(() => parseSystemUserEvent(noToken)).toThrow()
-    expect(() => parseSystemUserEvent(installPayload)).toThrow(/ONAPPUSERREADY/)
+    expect(() => parseSystemUserEvent(installPayload)).toThrow(/expected ONAPPUSERREADY, got "ONAPPINSTALL"/)
+    // Rejected by its CODE even when the body is a perfectly valid system-user event.
+    const otherCode = payload() as Record<string, unknown>
+    otherCode.event = 'ONAPPINSTALL'
+    expect(() => parseSystemUserEvent(otherCode)).toThrow(/expected ONAPPUSERREADY, got "ONAPPINSTALL"/)
   })
 })
 

@@ -90,6 +90,13 @@ describe('writeDistributionRow (idempotent)', () => {
     expect(await writeDistributionRow(INPUT, call)).toEqual({ id: '8', created: false })
     expect(calls.some(c => c.method === 'crm.item.add')).toBe(false)
   })
+  it('does NOT ask for the responsible when the row already exists (lazy, like the payment element)', async () => {
+    // The resolver is a DB read; its failure must not break writing to an existing row.
+    const { call } = fakeCall({ 'crm.item.list': () => ({ result: { items: [{ id: 8 }] } }) })
+    const responsible = vi.fn(async () => 512)
+    expect(await writeDistributionRow(INPUT, call, responsible)).toEqual({ id: '8', created: false })
+    expect(responsible).not.toHaveBeenCalled()
+  })
   it('throws when add returns no id', async () => {
     const { call } = fakeCall({
       'crm.item.list': () => ({ result: { items: [] } }),

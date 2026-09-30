@@ -562,6 +562,9 @@ describe('служебный пользователь приложения — s
     expect(await setSystemUserId(query, 'M1', 512)).toBe(true)
     const sql = calls[0]!.sql
     expect(sql).toMatch(/SET system_user_id = \$2 WHERE member_id = \$1/)
+    // Без RETURNING настоящий pg отдаёт [] на любой UPDATE, и «записано» читалось бы как «портала нет».
+    expect(sql).toMatch(/RETURNING\s+member_id/)
+    expect(calls[0]!.params).toEqual(['M1', 512])
     expect(sql).not.toMatch(/updated_at|access_token|refresh_token|application_token/)
   })
 
@@ -574,7 +577,10 @@ describe('служебный пользователь приложения — s
   ])('чтение %j → %j', async (rows, expected) => {
     const { calls, query } = spy(rows as Record<string, unknown>[])
     expect(await getSystemUserId(query, 'M1')).toBe(expected)
-    expect(calls[0]!.sql).toMatch(/WHERE member_id = \$1/)
+    // Колонка под своим именем и адрес — параметром портала: фейк отдаёт строки независимо от SQL,
+    // поэтому держит это только проверка самого запроса.
+    expect(calls[0]!.sql).toMatch(/SELECT system_user_id FROM portal_tokens WHERE member_id = \$1/)
+    expect(calls[0]!.params).toEqual(['M1'])
   })
 
   it('колонки ещё нет (42703, окно выката: воркер стартовал раньше миграции) — «не знаем», а не отказ', async () => {

@@ -459,6 +459,17 @@ describe('ONAPPUSERREADY (system user)', () => {
     expect(deps.saveSystemUser).toHaveBeenCalledWith('m1', 512)
   })
 
+  it('Redis THROWS on enqueue (a real outage, not a disabled queue) + verified claim: written synchronously too', async () => {
+    const deps = makeReqDeps({
+      loadStoredToken: vi.fn(async () => APP_TOKEN),
+      enqueue: vi.fn(async () => Promise.reject(new Error('ECONNREFUSED')))
+    })
+    const res = await handleEventRequest(userReady, deps)
+    // A 500 here would lose the system user for good: online events are not resent.
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.saveSystemUser).toHaveBeenCalledWith('m1', 512)
+  })
+
   it('queue down + UNverified claim: nobody could check it later — dropped with 503, nothing written', async () => {
     const deps = makeReqDeps({
       loadStoredToken: vi.fn(async () => ''),

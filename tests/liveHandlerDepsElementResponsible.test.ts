@@ -1,8 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StatementItem } from '../app/types/statement'
 import type { AllocationCandidate } from '../app/utils/allocation'
 import type { HandlerDeps } from '../server/queue/handlers'
-import type { RegistryWriteJobDeps } from '../server/utils/deferredWriteJobs'
+import { handleRegistryWriteJob, type RegistryWriteJobDeps } from '../server/utils/deferredWriteJobs'
 import { resetSystemUserRefusals } from '../server/utils/systemUser'
 import { applicationTokenHash } from '../server/utils/appTokenHash'
 
@@ -24,8 +24,11 @@ const h = vi.hoisted(() => {
     return { result: { item: {} } }
   }
   const resolver = Object.assign(async () => call, { evict: () => {}, batch: async () => null })
-  const store = { stored: '', written: [] as Array<[string, number]>, reads: [] as string[] }
-  return { sent, resolver, store, flags }
+  // Токены приложения — ПО ПОРТАЛУ: фейк, отдающий один токен на любой member_id, не заметил бы
+  // сверку не с тем порталом (находка QA-ревью #783).
+  const store = { tokens: {} as Record<string, string>, written: [] as Array<[string, number]>, reads: [] as string[] }
+  const captured: { processor?: (job: unknown) => Promise<unknown> } = {}
+  return { sent, resolver, store, flags, captured }
 })
 
 vi.mock('../server/utils/portalSdkResolver', async orig => ({
@@ -40,25 +43,46 @@ vi.mock('../server/utils/tokenStore', async orig => ({
     h.store.reads.push(memberId)
     return memberId === 'SYS' ? 512 : null
   },
-  getApplicationToken: async () => h.store.stored,
+  getApplicationToken: async (_q: unknown, memberId: string) => h.store.tokens[memberId] ?? '',
   setSystemUserId: async (_q: unknown, memberId: string, userId: number) => {
     h.store.written.push([memberId, userId])
     return true
   }
 }))
 
+// Обработчик событий — настоящий, BullMQ — нет: ловим сам процессор, который воркер отдал бы очереди.
+vi.mock('bullmq', async orig => ({
+  ...(await orig<typeof import('bullmq')>()),
+  Worker: class {
+    constructor(_name: string, processor: (job: unknown) => Promise<unknown>) {
+      h.captured.processor = processor
+    }
+
+    on() {
+      return this
+    }
+  }
+}))
+
+let worker: typeof import('../server/queue/worker')
 let deps: HandlerDeps
 let registry: RegistryWriteJobDeps
+// ⚠ Срок 60 с, а не умолчание проекта unit в 10: импорт графа воркера под нагрузкой занимает секунды,
+// и умолчание давало ложное «Hook timed out» (замер QA-ревью #783; у проекта nuxt срок поднят так же).
 beforeAll(async () => {
-  const worker = await import('../server/queue/worker')
+  worker = await import('../server/queue/worker')
   deps = worker.liveHandlerDeps()
   registry = worker.liveRegistryWriteDeps()
-})
+}, 60_000)
 beforeEach(() => {
   h.sent.length = 0
   h.store.written.length = 0
   h.store.reads.length = 0
+  h.store.tokens = {}
   resetSystemUserRefusals()
+})
+afterEach(() => {
+  vi.unstubAllEnvs()
 })
 
 const ITEM: StatementItem = {
@@ -109,20 +133,46 @@ describe('ответственный новых элементов в liveHandle
 
 describe('запись служебного пользователя в liveHandlerDeps', () => {
   it('заявка сверяется с токеном из базы и пишется', async () => {
-    h.store.stored = 'app-token'
-    try {
-      expect(await deps.saveSystemUser({ memberId: 'M', userId: 512, appTokenHash: applicationTokenHash('app-token') }, { finalAttempt: false })).toBe('saved')
-    } finally {
-      h.store.stored = ''
-    }
+    h.store.tokens.M = 'app-token'
+    expect(await deps.saveSystemUser({ memberId: 'M', userId: 512, appTokenHash: applicationTokenHash('app-token') }, { finalAttempt: false })).toBe('saved')
     expect(h.store.written).toEqual([['M', 512]])
   })
 
+  it('сверка — с токеном ИМЕННО портала заявки: у чужого портала токена нет, и заявка ждёт установку', async () => {
+    h.store.tokens.M = 'app-token'
+    const claim = { memberId: 'OTHER', userId: 512, appTokenHash: applicationTokenHash('app-token') }
+    await expect(deps.saveSystemUser(claim, { finalAttempt: false })).rejects.toThrow(/ещё не записана/)
+    expect(h.store.written).toEqual([])
+  })
+
   it('установки ещё нет — повтор, а на последней попытке тихий отказ; в базу ничего', async () => {
-    h.store.stored = ''
     const claim = { memberId: 'M', userId: 512, appTokenHash: 'deadbeef' }
     await expect(deps.saveSystemUser(claim, { finalAttempt: false })).rejects.toThrow(/ещё не записана/)
     expect(await deps.saveSystemUser(claim, { finalAttempt: true })).toBe('expired')
     expect(h.store.written).toEqual([])
+  })
+})
+
+describe('обработчик событий и отложенная дозапись — настоящая проводка воркера', () => {
+  it('признак последней попытки берётся из самой задачи: на ней заявка отказывает тихо, а не падает', async () => {
+    // Без признака исчерпанная задача легла бы в счёт падений очереди и будила бы оператора.
+    vi.stubEnv('REDIS_URL', 'redis://localhost:6379') // процессор не ходит в Redis — адрес нужен конструктору
+    const saveSystemUser = vi.fn(async () => 'saved' as const)
+    worker.startEventWorker({ ...deps, saveSystemUser })
+    const job = (attemptsMade: number) => ({
+      data: { memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 7, appTokenHash: 'h' } },
+      attemptsMade,
+      opts: { attempts: 6 }
+    })
+    await h.captured.processor!(job(5))
+    await h.captured.processor!(job(0))
+    expect(saveSystemUser.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ finalAttempt: true }, { finalAttempt: false }])
+  })
+
+  it('отложенная дозапись реестра целиком, от задачи до портала, кладёт новый элемент на служебного пользователя', async () => {
+    await handleRegistryWriteJob({
+      memberId: 'SYS', companyId: null, providerId: 'alfa-by', item: ITEM, paymentSp: SPS.paymentSp
+    }, registry)
+    expect(responsibles()).toEqual([512])
   })
 })
