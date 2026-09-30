@@ -43,7 +43,9 @@ import {
 import { enqueueActivityBind, enqueueCrmSync, enqueueRegistryWrite, enqueueTriggerFire } from './producers'
 import { dedupKey } from '../../app/utils/statement'
 import { dbQuery } from '../db/client'
-import { getApplicationToken, saveToken, clearSubscriptionEnded } from '../utils/tokenStore'
+import { getApplicationToken, getSystemUserId, saveToken, setSystemUserId, clearSubscriptionEnded } from '../utils/tokenStore'
+import { applySystemUserClaim, elementResponsibleId } from '../utils/systemUser'
+import { forgetTokenOwner } from '../utils/portalTokenOwner'
 import { markBankFetch, markRecognitionMisconfig, saveImportResult } from '../utils/importResultStore'
 import { saveBatchError, saveBatchResult } from '../utils/importBatchStore'
 import { isFinalAttempt } from '../utils/jobAttempt'
@@ -56,7 +58,7 @@ import { resolveOpLogMode, runSummaryLine } from '../../app/utils/opLogPolicy'
 import { useServerLogger } from '../utils/serverLogger'
 import { buildOpLogLine } from '../utils/opLogLine'
 import { logSafe } from '../utils/logSafe'
-import { findCompanyByAccount, findMyCompanyByAccount, readCompanyResponsible } from '../utils/companyLookup'
+import { findCompanyByAccount, findMyCompanyByAccount, readCompanyResponsible, type RestCall } from '../utils/companyLookup'
 import { writeTodoActivityViaRest } from '../utils/todoActivityWrite'
 import { writePaymentRegistryViaRest, backfillPaymentRegistryViaRest } from '../utils/paymentRegistryWrite'
 import { bindActivityViaRest } from '../utils/activityBindingsWrite'
@@ -155,6 +157,11 @@ const demoPause = (account: string): Promise<void> =>
 
 /** Live side-effects for the handlers. Transports are stubs for now (return the
  *  demo batch / nothing) with TODOs pointing at the stage that fills them in. */
+/** Responsible of a NEW smart-process element: the app's system user, else the installer (owner's
+ *  decision 2026-09-29). One DB read per write, plus one cached `profile` per portal on the fallback. */
+const elementResponsible = (memberId: string, call: RestCall): Promise<number> =>
+  elementResponsibleId(memberId, call, { loadSystemUserId: m => getSystemUserId(dbQuery, m) })
+
 export function liveHandlerDeps(): HandlerDeps {
   return {
     // Bank fetch (stage 5, A9): DEMO- accounts still emit the synthetic load-demo batch
@@ -290,7 +297,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // Throwing at least counts it; the activity write hits the same dead token a line later anyway.
       if (!call) throw new Error(`writePaymentRegistry: no portal token for ${memberId}`)
       try {
-        return await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+        return await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call, await elementResponsible(memberId, call))
       } catch (e) {
         // Logged HERE and rethrown: the handler counts the failure (and keeps the activity, see the
         // comment at its call site), but only this layer has the portal's actual error text. The
@@ -317,7 +324,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // ⚠ Нет токена — `already`, а НЕ throw: запись идёт поверх уже обработанной операции (дело
       // создано прошлым прогоном), и валить из-за неё разбор остальной пачки нечем оправдать.
       if (!call) return 'already'
-      return await backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+      return await backfillPaymentRegistryViaRest(item, companyId, provider, paymentSp, call, await elementResponsible(memberId, call))
     },
     // Read the portal's FULL settings blob (chat target + rules + recognition matrices)
     // from app.option ONCE per job (#16, #109). One read feeds both the chat and the
@@ -506,7 +513,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`writeLedger: no portal token for ${memberId} — retry (ledger write pending)`)
-      const res = await writeLedgerAllocation(etids.paymentSp, etids.distributionSp, item, target, companyId, call)
+      const res = await writeLedgerAllocation(etids.paymentSp, etids.distributionSp, item, target, companyId, call, await elementResponsible(memberId, call))
       return res.rowCreated
     },
     // TRIGGER dedup pre-check on the SP-ledger marker (#109 §9.3 #6 — replaces the Postgres
@@ -525,7 +532,7 @@ export function liveHandlerDeps(): HandlerDeps {
       if (isDemoAccount(item.account)) return false
       const call = await resolvePortalCall(memberId)
       if (!call) throw new Error(`writeTriggerFact: no portal token for ${memberId} — retry (trigger record pending)`)
-      const res = await writeTriggerLedgerFact(etids.paymentSp, etids.distributionSp, item, target, companyId, call)
+      const res = await writeTriggerLedgerFact(etids.paymentSp, etids.distributionSp, item, target, companyId, call, await elementResponsible(memberId, call))
       return res.created
     },
     // Fire the portal automation trigger for a decided trigger target (#79). BEST-EFFORT,
@@ -691,7 +698,14 @@ export function liveHandlerDeps(): HandlerDeps {
         expiresAt: c.expiresAt,
         applicationToken: c.applicationToken
       }, Number(job.ts) || 0)
+      // A reinstall by ANOTHER admin changes whose token we hold; the cached «installer» must go too.
+      forgetTokenOwner(job.memberId)
     },
+    // ONAPPUSERREADY (the app's system user): verify when the route could not, then record.
+    saveSystemUser: (claim, opts) => applySystemUserClaim(claim, {
+      loadApplicationToken: memberId => getApplicationToken(dbQuery, memberId),
+      setSystemUserId: (memberId, userId) => setSystemUserId(dbQuery, memberId, userId)
+    }, opts),
     // Uninstall always erases EVERYTHING for the portal: token row + import status +
     // allocation facts (#184) + lifetime metrics + connected bank tokens (stage 5). `eventTs`
     // records the ordering tombstone (#77). Activity dedup
@@ -738,6 +752,7 @@ export function liveHandlerDeps(): HandlerDeps {
       // оставляя банковские креды удалённого приложения — и `bankTokenKeepAlive` их обновлял.
       await purgePortalStorage(dbQuery, memberId, eventTs, LIVE_PORTAL_PURGE_DEPS)
       forgetBot(memberId) // кэш чат-бота в памяти процесса (#496) — вместе со всем остальным
+      forgetTokenOwner(memberId) // кэш «кто установил» — туда же
       resolvePortalCall.evict(memberId)
     },
     enqueueCrmSync
@@ -755,7 +770,7 @@ export function startEventWorker(deps: HandlerDeps): Worker {
     'job.queue': 'b24-events',
     'job.kind': job.data.kind,
     'portal.hash': portalHash(job.data.memberId)
-  }, () => handleEventJob(job.data, deps)), { connection: connectionOptions() })
+  }, () => handleEventJob(job.data, deps, { finalAttempt: isFinalAttempt(job) })), { connection: connectionOptions() })
 }
 
 // ── crm-sync stalled-reprocessing guard (#163, port from ai-price-import) ────────────────────
@@ -988,6 +1003,7 @@ export function liveRegistryWriteDeps(): RegistryWriteJobDeps {
   return {
     resolvePortalCall,
     writePaymentRegistry: writePaymentRegistryViaRest,
+    elementResponsible,
     findActivityId: findActivityByMarker,
     // ⚠ No batch — a single binding, and the same path the bindings retry takes.
     bindActivity: (activityId, refs, call) => bindActivityViaRest(activityId, refs, call)

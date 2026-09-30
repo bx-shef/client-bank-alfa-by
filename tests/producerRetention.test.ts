@@ -17,7 +17,9 @@ vi.mock('bullmq', () => ({
   }
 }))
 
-const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, enqueueRegistryWrite, enqueueActivityBind, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION, CRM_RETRY_RETENTION, DEFERRED_WRITE_RETRY } = await import('../server/queue/producers')
+const { stallBudgetMs } = await import('../server/utils/queueAlert')
+const { Q_EVENTS } = await import('../server/queue/topology')
+const { enqueueParse, enqueueCrmSync, enqueueEvent, enqueueFetch, enqueueRegistryWrite, enqueueActivityBind, STATEMENT_JOB_RETENTION, CREDENTIAL_JOB_RETENTION, FETCH_JOB_RETENTION, CRM_RETRY_RETENTION, DEFERRED_WRITE_RETRY, SYSTEM_USER_RETRY_OPTS } = await import('../server/queue/producers')
 
 afterEach(() => {
   adds.length = 0
@@ -54,6 +56,23 @@ describe('producer retention wiring', () => {
     expect(optsFor('b24-events')).toMatchObject(CREDENTIAL_JOB_RETENTION)
     expect(optsFor('b24-events')!.removeOnComplete).toBe(true)
     expect(optsFor('b24-events')).toHaveProperty('jobId')
+    // Install/uninstall keep the queue's default retries — the long patience is ONAPPUSERREADY's own.
+    expect(optsFor('b24-events')).not.toHaveProperty('attempts')
+  })
+
+  it('ONAPPUSERREADY waits for the install with its own retries, and keeps retention + jobId', async () => {
+    // The event often arrives before the install is persisted, and only the install's stored token
+    // can authenticate it — so the consumer retries until it is there (≈2.5 min, see producers.ts).
+    await enqueueEvent({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 5 } })
+    const opts = optsFor('b24-events')!
+    expect(opts).toMatchObject({ ...CREDENTIAL_JOB_RETENTION, ...SYSTEM_USER_RETRY_OPTS })
+    expect(opts).toHaveProperty('jobId')
+    const { attempts, backoff } = SYSTEM_USER_RETRY_OPTS
+    let total = 0
+    for (let n = 1; n < attempts; n++) total += backoff.delay * 2 ** (n - 1)
+    expect(total, 'far above the normal second or two between the two events').toBeGreaterThanOrEqual(60_000)
+    // A job bouncing in backoff counts as unfinished for the stall alert — stay inside its budget.
+    expect(total, 'and inside the stall budget of b24-events').toBeLessThan(stallBudgetMs(Q_EVENTS)!)
   })
 
   it('bank-fetch REMOVES the completed job — that frees the stable jobId for the next sweep', async () => {

@@ -1,6 +1,7 @@
-// Pure handlers for Bitrix24 outgoing event webhooks: ONAPPINSTALL and
-// ONAPPUNINSTALL. No I/O — parses/validates the event envelope, extracts the
-// per-portal credentials to persist, authenticates the call via
+// Pure handlers for Bitrix24 outgoing event webhooks: ONAPPINSTALL,
+// ONAPPUNINSTALL and ONAPPUSERREADY (the app's system user). No I/O —
+// parses/validates the event envelope, extracts the per-portal credentials
+// to persist, authenticates the call via
 // application_token, and decides what the backend should do (store / purge /
 // ignore). The HTTP transport, the token store and the side effects live in the
 // engine (backend); these helpers are unit-testable offline and portable.
@@ -25,8 +26,11 @@ import type {
   B24InstallEventData,
   B24UninstallEvent,
   B24UninstallEventData,
-  PortalCredentials
+  PortalCredentials,
+  SystemUserClaim
 } from '~/types/b24Events'
+import { B24_SYSTEM_USER_EVENT } from '~/config/b24'
+import { portalUserId } from '~/utils/activity'
 
 /** Event code B24 sends right after a successful install (carries OAuth + token). */
 export const B24_EVENT_INSTALL = 'ONAPPINSTALL'
@@ -177,6 +181,36 @@ export function parseUninstallEvent(payload: unknown): B24UninstallEvent {
   const auth = parseEventAuth(payload)
   const data = ((payload as { data?: unknown }).data ?? {}) as B24UninstallEventData
   return { ...(payload as B24Event<B24UninstallEventData>), auth, data }
+}
+
+/**
+ * Parse + validate ONAPPUSERREADY — «the portal created (or re-activated) the app's system user».
+ * Throws on a malformed payload. Only the user id is taken: the long-lived authorization in `data`
+ * is deliberately left behind (see `SystemUserClaim`).
+ *
+ * ⚠ The id goes through the same strict parser as every other portal user id (`portalUserId`):
+ * it will become the responsible of CRM elements, and the portal does not validate that field, so
+ * `'0x11'`, `'1e1'` or a digit string past 2^53 would silently land them on somebody else.
+ *
+ * ⚠ `data.member_id` is compared with `auth.member_id` when present: the application token
+ * authenticates `auth`, and an event whose two blocks name different portals is not one we
+ * understand. It is NOT required — the docs mark it mandatory, but a stricter parser than the
+ * sender would turn a harmless omission into a silently dead feature.
+ */
+export function parseSystemUserEvent(payload: unknown): SystemUserClaim {
+  if (eventCode(payload) !== B24_SYSTEM_USER_EVENT) {
+    throw new Error(`B24 event: expected ${B24_SYSTEM_USER_EVENT}, got "${eventCode(payload)}"`)
+  }
+  const auth = parseEventAuth(payload)
+  const data = (payload as { data?: unknown }).data
+  if (!data || typeof data !== 'object') throw new Error(`B24 ${B24_SYSTEM_USER_EVENT}: missing data`)
+  const d = data as Record<string, unknown>
+  const userId = portalUserId(d.user_id)
+  if (userId === null) throw new Error(`B24 ${B24_SYSTEM_USER_EVENT}: data.user_id is not a portal user id`)
+  if (d.member_id !== undefined && d.member_id !== auth.member_id) {
+    throw new Error(`B24 ${B24_SYSTEM_USER_EVENT}: data.member_id differs from auth.member_id`)
+  }
+  return { memberId: auth.member_id, userId, applicationToken: auth.application_token }
 }
 
 /** Whether the install is fully finished (`INSTALLED === 'Y'`). Events fire only

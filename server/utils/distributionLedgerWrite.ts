@@ -258,13 +258,17 @@ export async function writeLedgerAllocation(
   op: StatementItem,
   target: AllocationCandidate,
   companyId: string | undefined,
-  call: RestCall
+  call: RestCall,
+  /** Responsible of the elements this call CREATES (the app's system user, else the installer —
+   *  owner's decision 2026-09-29). An element found by its marker keeps its own. */
+  assignedById?: number
 ): Promise<LedgerAllocationResult> {
   const payment = await ensurePaymentElement(paymentSp, {
     opportunity: op.amount,
     currency: op.currency,
     marker: dedupKey(op),
-    companyId
+    companyId,
+    ...(assignedById !== undefined ? { assignedById } : {})
   }, call)
 
   const row = await writeDistributionRow({
@@ -276,7 +280,8 @@ export async function writeLedgerAllocation(
     targetKind: target.kind,
     targetId: target.id,
     source: 'auto',
-    marker: allocationFactKey(op, target)
+    marker: allocationFactKey(op, target),
+    ...(assignedById !== undefined ? { assignedById } : {})
   }, call)
 
   const remaining = await recomputeNeedDistribution(paymentSp, payment.id, distributionSp, op.amount, op.currency, call)
@@ -304,13 +309,16 @@ export async function writeTriggerLedgerFact(
   op: StatementItem,
   target: AllocationCandidate,
   companyId: string | undefined,
-  call: RestCall
+  call: RestCall,
+  /** Responsible of the elements this call creates — see `writeLedgerAllocation`. */
+  assignedById?: number
 ): Promise<{ created: boolean }> {
   const payment = await ensurePaymentElement(paymentSp, {
     opportunity: op.amount,
     currency: op.currency,
     marker: dedupKey(op),
-    companyId
+    companyId,
+    ...(assignedById !== undefined ? { assignedById } : {})
   }, call)
 
   const row = await writeDistributionRow({
@@ -322,7 +330,8 @@ export async function writeTriggerLedgerFact(
     targetKind: target.kind,
     targetId: target.id,
     source: 'auto',
-    marker: allocationFactKey(op, target)
+    marker: allocationFactKey(op, target),
+    ...(assignedById !== undefined ? { assignedById } : {})
   }, call)
 
   return { created: row.created }

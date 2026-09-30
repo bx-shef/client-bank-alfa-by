@@ -77,7 +77,10 @@ export async function writePaymentRegistryViaRest(
   companyId: string | null,
   provider: BankProviderId,
   paymentSp: SpRef,
-  call: RestCall
+  call: RestCall,
+  /** Ответственный НОВОГО элемента — служебный пользователь приложения, иначе установивший
+   *  (решение владельца 2026-09-29). Найденному элементу его не переставляем. */
+  assignedById?: number
 ): Promise<string> {
   const registry = buildRegistryFields(item, provider)
   const { id, created } = await ensurePaymentElement(paymentSp, {
@@ -91,6 +94,7 @@ export async function writePaymentRegistryViaRest(
     // рендерится в интерфейсе портала.
     title: neutralizeBb(buildActivityTitle(item)),
     ...(companyId ? { companyId } : {}),
+    ...(assignedById !== undefined ? { assignedById } : {}),
     registry
   }, call)
   if (!created) {
@@ -131,7 +135,9 @@ export async function backfillPaymentRegistryViaRest(
   companyId: string | null,
   provider: BankProviderId,
   paymentSp: SpRef,
-  call: RestCall
+  call: RestCall,
+  /** Ответственный — только на ветке СОЗДАНИЯ; дозаполнение существующего элемента его не трогает. */
+  assignedById?: number
 ): Promise<'filled' | 'already' | 'created'> {
   const marker = dedupKey(item)
   // ⚠ Пустой маркер дал бы фильтр без условий, то есть перечисление ВСЕГО смарт-процесса (тот же
@@ -143,7 +149,7 @@ export async function backfillPaymentRegistryViaRest(
   const found = extractListItems(res)[0]
   // Элемента нет — создаём полноценно (см. ⚠ выше): это и есть портал, где СП появился позже.
   if (!found) {
-    await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call)
+    await writePaymentRegistryViaRest(item, companyId, provider, paymentSp, call, assignedById)
     return 'created'
   }
   const indicator = buildUfFieldNameCamel(paymentSp.id, PAYMENT_SP_FIELDS.direction.postfix)

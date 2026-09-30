@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { handleEventRequest, processB24Event } from '../server/utils/b24EventsHandler'
 import type { B24EventDeps, B24RequestDeps } from '../server/utils/b24EventsHandler'
@@ -118,6 +119,7 @@ function makeReqDeps(over: Partial<B24RequestDeps> = {}): B24RequestDeps {
     enqueueDeletion: vi.fn(async () => true),
     saveCredentials: vi.fn(async () => {}),
     deletePortal: vi.fn(async () => {}),
+    saveSystemUser: vi.fn(async () => {}),
     encrypt: vi.fn((s: string) => `enc(${s})`),
     now: () => NOW,
     ...over
@@ -370,5 +372,83 @@ describe('handleEventRequest — expiresAt/TTL coercion', () => {
   it('falls back to 3600s for a non-finite value', async () => {
     const job = await jobFor('abc')
     expect(job.credentials.expiresAt).toBe(NOW + 3600 * 1000)
+  })
+})
+
+// ONAPPUSERREADY — the app's system user (owner's decision 2026-09-29: smart-process elements go on
+// it). Authenticated by the stored application token, like every event but install; the twist is that
+// it routinely arrives BEFORE the install is persisted, and online events are never resent.
+describe('ONAPPUSERREADY (system user)', () => {
+  const userReady = {
+    event: 'ONAPPUSERREADY',
+    ts: '1756890123',
+    data: { user_id: '512', member_id: 'm1', access_token: 'SYS_A', refresh_token: 'SYS_R' },
+    auth: { domain: 'p.bitrix24.ru', member_id: 'm1', user_id: '1', application_token: APP_TOKEN }
+  }
+  const sha256 = (v: string) => createHash('sha256').update(v, 'utf8').digest('hex')
+
+  it('install already persisted: verifies the token right away and enqueues a VERIFIED claim', async () => {
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.status).toBe(200)
+    expect(res.outcome).toBe('queued')
+    expect(deps.enqueue).toHaveBeenCalledWith({
+      memberId: 'm1', domain: 'p.bitrix24.ru', kind: 'ONAPPUSERREADY', ts: '1756890123', systemUser: { userId: 512 }
+    })
+  })
+
+  it('a wrong token is refused (403) and nothing is enqueued', async () => {
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => 'another-portal-token') })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.status).toBe(403)
+    expect(res.outcome).toBe('none')
+    expect(deps.enqueue).not.toHaveBeenCalled()
+    expect(deps.saveSystemUser).not.toHaveBeenCalled()
+  })
+
+  it('install NOT persisted yet: accepted and deferred with the token HASH, never the token', async () => {
+    // Refusing here would lose the system user for good — the portal does not resend online events.
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => '') })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ deferred: true })
+    const job = (deps.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(job.systemUser).toEqual({ userId: 512, appTokenHash: sha256(APP_TOKEN) })
+    const wire = JSON.stringify(job)
+    expect(wire).not.toContain(APP_TOKEN) // the app token authenticates uninstalls — not for Redis
+    expect(wire).not.toContain('SYS_R') // nor the system user's own long-lived authorization
+    expect(wire).not.toContain('SYS_A')
+  })
+
+  it('queue down + verified claim: written synchronously (UPDATE-only on the store side)', async () => {
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN), enqueue: vi.fn(async () => false) })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.outcome).toBe('sync-fallback')
+    expect(deps.saveSystemUser).toHaveBeenCalledWith('m1', 512)
+  })
+
+  it('queue down + UNverified claim: nobody could check it later — dropped with 503, nothing written', async () => {
+    const deps = makeReqDeps({
+      loadStoredToken: vi.fn(async () => ''),
+      enqueue: vi.fn(async () => Promise.reject(new Error('ECONNREFUSED')))
+    })
+    const res = await handleEventRequest(userReady, deps)
+    expect(res.status).toBe(503)
+    expect(res.outcome).toBe('none')
+    expect(deps.saveSystemUser).not.toHaveBeenCalled()
+  })
+
+  it('a malformed event is 400 and touches nothing', async () => {
+    const deps = makeReqDeps()
+    const res = await handleEventRequest({ ...userReady, data: { user_id: '0x11' } }, deps)
+    expect(res.status).toBe(400)
+    expect(deps.loadStoredToken).not.toHaveBeenCalled()
+    expect(deps.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('does not go through the install binding (no OAuth refresh of anybody\'s token)', async () => {
+    const deps = makeReqDeps({ loadStoredToken: vi.fn(async () => APP_TOKEN) })
+    await handleEventRequest(userReady, deps)
+    expect(deps.bindInstallMember).not.toHaveBeenCalled()
   })
 })

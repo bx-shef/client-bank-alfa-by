@@ -18,7 +18,9 @@ import {
   selectSubscriptionEnded,
   selectSubscriptionCutoff,
   countSubscriptionCutoff,
-  getSubscriptionEndedAt
+  getSubscriptionEndedAt,
+  getSystemUserId,
+  setSystemUserId
 } from '../server/utils/tokenStore'
 import type { PortalToken } from '../server/utils/tokenStore'
 
@@ -527,5 +529,51 @@ describe('метка истёкшей подписки (#614)', () => {
     expect(sql).toMatch(/subscription_ended_at > 0/)
     expect(sql).toMatch(/subscription_ended_at <= \$1/)
     expect(calls[0]?.params).toEqual([456])
+  })
+})
+
+// Служебный пользователь приложения (ONAPPUSERREADY, решение владельца 2026-09-29). Проверяется САМ
+// SQL: UPDATE-only и ровно одна колонка — промах в любом из двух не падает и на живой строке не виден.
+describe('служебный пользователь приложения — system_user_id', () => {
+  function spy(rows: Record<string, unknown>[] = []) {
+    const calls: { sql: string, params: unknown[] }[] = []
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      calls.push({ sql, params })
+      return rows
+    })
+    return { calls, query: query as unknown as QueryFn }
+  }
+
+  it('колонка есть в схеме — ALTER, а не CREATE (на живых базах таблица уже существует)', () => {
+    expect(SCHEMA_SQL).toMatch(/ALTER TABLE portal_tokens ADD COLUMN IF NOT EXISTS system_user_id BIGINT NOT NULL DEFAULT 0/)
+  })
+
+  it('запись — UPDATE-only: событие, опередившее установку, не создаёт регистрацию без токенов', async () => {
+    const { calls, query } = spy()
+    expect(await setSystemUserId(query, 'M1', 512)).toBe(false) // строки нет — честное false
+    const sql = calls.map(c => c.sql).join('\n')
+    expect(sql).toMatch(/^\s*UPDATE portal_tokens/)
+    expect(sql).not.toMatch(/INSERT/)
+    expect(calls[0]!.params).toEqual(['M1', 512])
+  })
+
+  it('пишет ровно одну колонку, адресно по порталу, и не трогает updated_at (по нему выбирают продление)', async () => {
+    const { calls, query } = spy([{ member_id: 'M1' }])
+    expect(await setSystemUserId(query, 'M1', 512)).toBe(true)
+    const sql = calls[0]!.sql
+    expect(sql).toMatch(/SET system_user_id = \$2 WHERE member_id = \$1/)
+    expect(sql).not.toMatch(/updated_at|access_token|refresh_token|application_token/)
+  })
+
+  it.each([
+    [[], null],
+    [[{ system_user_id: '0' }], null], // умолчание колонки — «не знаем», а не пользователь 0
+    [[{ system_user_id: '512' }], 512], // BIGINT приходит из pg строкой
+    [[{ system_user_id: 512 }], 512],
+    [[{ system_user_id: '9007199254740993' }], null] // за пределом 2^53 — чужой человек, не он
+  ])('чтение %j → %j', async (rows, expected) => {
+    const { calls, query } = spy(rows as Record<string, unknown>[])
+    expect(await getSystemUserId(query, 'M1')).toBe(expected)
+    expect(calls[0]!.sql).toMatch(/WHERE member_id = \$1/)
   })
 })

@@ -94,7 +94,7 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
   // null chat ⇒ getPortalSettings returns null (settings unavailable); else a full blob.
   const errorChat = o.errorChat ?? { dialogId: '' }
   const settings: PortalSettings | null = chat === null ? null : { chat, errorChat, recognition, allocation: o.allocation ?? {}, autoDistribute: o.autoDistribute ?? false, autoEraseActivities: false }
-  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], unmatchedClaim: [], unmatchedSummary: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], responsible: [], activityResponsible: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [] }
+  const calls: Record<string, unknown[]> = { crm: [], activity: [], chat: [], del: [], save: [], find: [], findMy: [], activityNote: [], settings: [], recognized: [], resolve: [], resolvedLog: [], negStage: [], negStageSmart: [], allocLog: [], errChat: [], unresolvedChat: [], settingsChat: [], unmatchedNotify: [], unmatchedClaim: [], unmatchedSummary: [], allocApplied: [], allocApply: [], trigApply: [], trigEnqueue: [], activityFails: [], responsible: [], activityResponsible: [], ledger: [], trigHas: [], trigRec: [], opLog: [], registry: [], backfill: [], bind: [], regRetry: [], bindRetry: [], sysUser: [] }
   const negativeStage = o.negativeStage === undefined ? null : o.negativeStage
   const deps: HandlerDeps = {
     fetchStatement: async () => batch,
@@ -236,6 +236,10 @@ function fakeDeps(opts: FakeOpts | StatementItem[] = {}): { deps: HandlerDeps, c
     savePortal: async (job) => {
       calls.save.push(job.memberId)
     },
+    saveSystemUser: async (claim, opts) => {
+      calls.sysUser.push([claim, opts])
+      return 'saved'
+    },
     deletePortal: async (m, eventTs) => {
       calls.del.push([m, eventTs])
     },
@@ -270,6 +274,32 @@ describe('handleEventJob', () => {
     const r = await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPINSTALL', ts: '1' }, deps)
     expect(r.registered).toBe(false)
     expect(calls.save).toEqual([])
+  })
+
+  // Служебный пользователь приложения (ONAPPUSERREADY): заявка уходит в `saveSystemUser` ровно той
+  // формы, что построил роут, а признак последней попытки доезжает от воркера.
+  it('передаёт заявку о служебном пользователе и признак последней попытки', async () => {
+    const { deps, calls } = fakeDeps()
+    const r = await handleEventJob(
+      { memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 512, appTokenHash: 'h' } },
+      deps,
+      { finalAttempt: true }
+    )
+    expect(r).toEqual({ kind: 'ONAPPUSERREADY', cleaned: false, registered: false, systemUser: 'saved' })
+    expect(calls.sysUser).toEqual([[{ memberId: 'M', userId: 512, appTokenHash: 'h' }, { finalAttempt: true }]])
+    expect(calls.save).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+  it('сверенная роутом заявка едет без отпечатка, а по умолчанию попытка не последняя', async () => {
+    const { deps, calls } = fakeDeps()
+    await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1', systemUser: { userId: 7 } }, deps)
+    expect(calls.sysUser).toEqual([[{ memberId: 'M', userId: 7 }, { finalAttempt: false }]])
+  })
+  it('битая задача без systemUser ничего не пишет', async () => {
+    const { deps, calls } = fakeDeps()
+    const r = await handleEventJob({ memberId: 'M', domain: 'd', kind: 'ONAPPUSERREADY', ts: '1' }, deps)
+    expect(r).toEqual({ kind: 'ONAPPUSERREADY', cleaned: false, registered: false })
+    expect(calls.sysUser).toEqual([])
   })
 })
 

@@ -7,6 +7,7 @@
 // idempotently on boot by server/plugins/migrate.ts).
 
 import { decryptSecret, encryptSecret } from './secretCrypto'
+import { portalUserId } from '../../app/utils/activity'
 
 /** A thin DB query function (e.g. pg `pool.query`) returning the rows. */
 export type QueryFn = (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>
@@ -393,4 +394,37 @@ export async function getSubscriptionEndedAt(query: QueryFn, memberId: string): 
     [memberId]
   )
   return Number((rows[0] as { subscription_ended_at?: unknown } | undefined)?.subscription_ended_at ?? 0)
+}
+
+/**
+ * Записать id служебного пользователя приложения (событие ONAPPUSERREADY) — на него ставятся
+ * элементы смарт-процессов (решение владельца 2026-09-29). `false` — регистрации портала уже нет.
+ *
+ * ⚠ UPDATE-only, как все писатели после #510, и РОВНО ОДНА колонка. Событие приходит отдельно от
+ * установки и может её опередить; создай оно строку — у портала появилась бы регистрация без
+ * токенов, то есть «установленный» портал, у которого ничего не работает. Опоздавшее событие уже
+ * удалённого портала точно так же ничего не находит и ничего не воскрешает.
+ *
+ * ⚠ `updated_at` НЕ трогаем: по нему выбираются порталы для продления токена (#175), а к токену
+ * служебный пользователь отношения не имеет.
+ */
+export async function setSystemUserId(query: QueryFn, memberId: string, userId: number): Promise<boolean> {
+  const rows = await query(
+    `UPDATE portal_tokens SET system_user_id = $2 WHERE member_id = $1 RETURNING member_id`,
+    [memberId, userId]
+  )
+  return rows.length > 0
+}
+
+/**
+ * id служебного пользователя портала, либо `null` — не знаем (портал не прислал событие: локальное
+ * приложение, установка до этой правки, старая коробка). `null` значит «ответственного не задаём», и
+ * портал ставит владельца токена, то есть установившего.
+ *
+ * ⚠ Разбор тем же строгим `portalUserId`, что у всех id пользователя портала: BIGINT приходит из pg
+ * строкой, и ноль (умолчание колонки) обязан читаться как «нет», а не как пользователь 0.
+ */
+export async function getSystemUserId(query: QueryFn, memberId: string): Promise<number | null> {
+  const rows = await query(`SELECT system_user_id FROM portal_tokens WHERE member_id = $1`, [memberId])
+  return portalUserId((rows[0] as { system_user_id?: unknown } | undefined)?.system_user_id)
 }

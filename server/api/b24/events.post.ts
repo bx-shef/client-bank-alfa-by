@@ -9,7 +9,7 @@
 import { parseBracketForm } from '../../../app/utils/b24Events'
 import { dbQuery } from '../../db/client'
 import { handleEventRequest } from '../../utils/b24EventsHandler'
-import { getApplicationToken, saveToken } from '../../utils/tokenStore'
+import { getApplicationToken, saveToken, setSystemUserId } from '../../utils/tokenStore'
 import { LIVE_PORTAL_PURGE_DEPS, portalPurgeReasonText, purgePortalStorage } from '../../utils/portalPurge'
 import { encryptSecret } from '../../utils/secretCrypto'
 import { enqueueEvent, enqueueDeletion } from '../../queue/producers'
@@ -71,6 +71,10 @@ export default defineEventHandler(async (event) => {
           + `${portalPurgeReasonText('uninstall')}, аварийный путь без очереди (#654)`
         )
         await purgePortalStorage(dbQuery, memberId, eventTs, LIVE_PORTAL_PURGE_DEPS)
+      },
+      // ONAPPUSERREADY with Redis down: only a VERIFIED claim reaches here (see the handler).
+      saveSystemUser: async (memberId, userId) => {
+        await setSystemUserId(dbQuery, memberId, userId)
       },
       encrypt: encryptSecret,
       now: () => Date.now(),

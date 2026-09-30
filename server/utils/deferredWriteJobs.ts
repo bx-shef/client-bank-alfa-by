@@ -37,8 +37,12 @@ export interface RegistryWriteJobDeps {
     companyId: string | null,
     provider: BankProviderId,
     paymentSp: SpRef,
-    call: RestCall
+    call: RestCall,
+    assignedById?: number
   ) => Promise<string>
+  /** Ответственный нового элемента — служебный пользователь, иначе установивший (`elementResponsibleId`).
+   *  ⚠ Тот же, что у синхронного пути: дозапись не имеет права поставить элемент на другого. */
+  elementResponsible: (memberId: string, call: RestCall) => Promise<number>
   /** Найти дело операции по маркеру — то же чтение, что и дедуп-гейт `crm-sync`. */
   findActivityId: (originatorId: string, originId: string, call: RestCall) => Promise<string | null>
   /** Привязать элемент к делу (тот же транспорт, что и синхронный путь). */
@@ -61,7 +65,8 @@ export async function handleRegistryWriteJob(job: RegistryWriteJob, deps: Regist
   if (!call) throw new Error(`registry retry: no portal token for ${job.memberId} — retry (pending)`)
   let id: string
   try {
-    id = await deps.writePaymentRegistry(job.item, job.companyId, job.providerId, job.paymentSp, call)
+    const responsible = await deps.elementResponsible(job.memberId, call)
+    id = await deps.writePaymentRegistry(job.item, job.companyId, job.providerId, job.paymentSp, call, responsible)
   } catch (e) {
     // Текст приходит ОТ ПОРТАЛА — в лог только через `logSafe` (PRIVACY.md §Логи). Синхронный
     // близнец в `worker.ts` делает ровно это; без обёртки сырая строка ушла бы в лог падений

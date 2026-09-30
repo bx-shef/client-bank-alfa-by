@@ -248,6 +248,17 @@ describe('writeLedgerAllocation (orchestrator)', () => {
     expect((rowAdd.params.fields as Record<string, unknown>)[ufName(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]).toBe('BY00|D1|invoice|39')
   })
 
+  it('puts BOTH created elements on the given responsible (owner\'s decision 2026-09-29)', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': () => ({ result: { items: [] } }),
+      'crm.item.add': params => (params.entityTypeId === 1044 ? { result: { item: { id: 500 } } } : { result: { item: { id: 900 } } }),
+      'crm.item.update': () => ({ result: { item: {} } })
+    })
+    await writeLedgerAllocation(PSP, DSP, OP, TARGET, '12', call, 512)
+    const adds = calls.filter(c => c.method === 'crm.item.add')
+    expect(adds.map(c => (c.params.fields as Record<string, unknown>).assignedById)).toEqual([512, 512])
+  })
+
   it('is idempotent — existing carrier + row are reused, nothing double-added', async () => {
     const { call, calls } = fakeCall({
       'crm.item.list': (params) => {
@@ -299,6 +310,15 @@ describe('writeTriggerLedgerFact (§9.3 #6 — zero-amount trigger marker row)',
     expect(fields[markerUf]).toBe('BY00|D1|deal|77')
     // NO recompute (crm.item.update) — a zero-amount row leaves «осталось» untouched
     expect(calls.some(c => c.method === 'crm.item.update')).toBe(false)
+  })
+  it('puts the carrier and the marker row on the given responsible', async () => {
+    const { call, calls } = fakeCall({
+      'crm.item.list': () => ({ result: { items: [] } }),
+      'crm.item.add': params => (params.entityTypeId === 1044 ? { result: { item: { id: 500 } } } : { result: { item: { id: 901 } } })
+    })
+    await writeTriggerLedgerFact(PSP, DSP, OP, TRIGGER_TARGET, '12', call, 512)
+    const adds = calls.filter(c => c.method === 'crm.item.add')
+    expect(adds.map(c => (c.params.fields as Record<string, unknown>).assignedById)).toEqual([512, 512])
   })
   it('is idempotent — an existing marker row is reused, nothing added', async () => {
     const { call, calls } = fakeCall({

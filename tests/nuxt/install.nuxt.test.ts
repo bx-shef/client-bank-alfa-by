@@ -206,6 +206,52 @@ describe('install.vue — inside a B24 frame', () => {
     expect(wrapper.text()).not.toContain('Ошибка установки')
   })
 
+  // Служебный пользователь приложения (решение владельца 2026-09-29): его id приходит только
+  // событием ONAPPUSERREADY, а подписка на него — отдельный вызов, отказ которого установку не роняет.
+  type BindArg = { method?: string, params?: Record<string, unknown> }
+  const systemUserBinds = () => callSpy.mock.calls
+    .map(c => (c as unknown[])[0] as BindArg)
+    .filter(a => a?.method === 'event.bind' && a.params?.event === 'ONAPPUSERREADY')
+
+  it('подписывает ONAPPUSERREADY на обработчик backend — отдельным вызовом и ДО installFinish', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    const binds = systemUserBinds()
+    expect(binds).toHaveLength(1)
+    expect(String(binds[0]!.params!.handler)).toMatch(/^https?:\/\/.+\/api\/b24\/events$/)
+    const index = callSpy.mock.calls.findIndex(c => ((c as unknown[])[0] as BindArg)?.params?.event === 'ONAPPUSERREADY')
+    expect(callSpy.mock.invocationCallOrder[index]!).toBeLessThan(finishSpy.mock.invocationCallOrder[0]!)
+    // И НЕ в общем батче: там отказ валит установку, а здесь он штатный на портале без события.
+    const inBatch = batchSpy.mock.calls.some(c => JSON.stringify(c).includes('ONAPPUSERREADY'))
+    expect(inBatch).toBe(false)
+  })
+
+  it('портал не знает события (ERROR_EVENT_NOT_FOUND) — установка ВСЁ РАВНО завершается', async () => {
+    callSpy.mockImplementation(async (arg?: unknown) => {
+      const bad = (arg as BindArg)?.params?.event === 'ONAPPUSERREADY'
+      return { isSuccess: !bad, getData: () => ({ result: !bad }), getErrorMessages: () => (bad ? ['Event not found'] : []) }
+    })
+    const wrapper = await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(finishSpy).toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Ошибка установки')
+  })
+
+  it('уже подписано на наш обработчик — повторно не подписываем', async () => {
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    const handler = String(systemUserBinds()[0]!.params!.handler)
+    callSpy.mockClear()
+    batchSpy.mockImplementation(async () => ({
+      isSuccess: true,
+      getData: () => ({ scope: ['crm'], eventList: [{ event: 'ONAPPUSERREADY', handler }] }),
+      getErrorMessages: () => [] as string[]
+    }))
+    await mountSuspended(InstallPage)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(systemUserBinds()).toHaveLength(0)
+  })
+
   it('surfaces a retryable error and does NOT finish when event.bind fails', async () => {
     // Init batch (app.info/scope/event.get) succeeds; the bind batch resolves as
     // a failed Result — install must not finish with events unbound.

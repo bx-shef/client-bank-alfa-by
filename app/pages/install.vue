@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useB24 } from '~/composables/useB24'
 import {
   APP_SLIDER_PLACE_IMPORT, APP_URI_HANDLER_PATH, APP_URI_PLACE_PARAM,
-  B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER
+  B24_ALL_BOUND_EVENTS, B24_CHAT_BOT, B24_EVENT_HANDLER_PATH, B24_PAYMENT_TRIGGER, B24_SYSTEM_USER_EVENT
 } from '~/config/b24'
 import { buildAppUriLink } from '~/utils/appUriLink'
 import { useAppCode } from '~/composables/useAppCode'
@@ -70,6 +70,10 @@ const checkingBackend = ref(false)
 const triggerRegistered = ref('')
 // Best-effort chat-bot registration outcome (#496), same shape as the trigger above.
 const botRegistered = ref('')
+/** Подписка на событие о служебном пользователе (`ONAPPUSERREADY`): '' — не пытались, 'ok',
+ *  'уже подписано' или текст ошибки. ⚠ Это подписка, а не сам служебный пользователь: событие
+ *  придёт после `installFinish`, и дошло ли оно, видно в логе backend, а не здесь. */
+const systemUserEvent = ref('')
 /** Регистрация точки `REST_APP_URI` (#19): '' — не пытались, 'ok', 'уже зарегистрирован' или текст
  *  ошибки. ⚠ «Уже зарегистрирован» — ШТАТНЫЙ исход переустановки, а не отказ: у точки одна
  *  регистрация, и повтор `placement.bind` всегда отвечает `ERROR_PLACEMENT_MAX_COUNT`. */
@@ -135,6 +139,8 @@ const diagnostics = computed(() => {
     smartProcess: spProvisioned.value,
     // Best-effort chat-bot registration (#496): '' hides the row.
     bot: botRegistered.value,
+    // Подписка на событие о служебном пользователе — пустое значение прячет строку, как у соседних.
+    systemUserEvent: systemUserEvent.value,
     // Ссылка на экраны приложения (#19). Обе строки прячутся пустым значением, как соседние.
     appUri: placementBound.value,
     appImportLink: appImportLink.value
@@ -198,6 +204,37 @@ async function bindEvents(): Promise<void> {
   if (bind.length) {
     const res = await $b24.actions.v2.batch.make({ calls: bind })
     if (!res.isSuccess) throw new Error(`event.bind не удался: ${res.getErrorMessages().join('; ')}`)
+  }
+}
+
+/**
+ * Подписка на событие о служебном пользователе приложения (`ONAPPUSERREADY`): на него ставятся
+ * элементы смарт-процессов (решение владельца 2026-09-29), а узнать его id можно только из события.
+ *
+ * ⚠ BEST-EFFORT и ОТДЕЛЬНО от `bindEvents`: там отказ роняет установку (без `ONAPPINSTALL` сервер
+ * портала не узнает), здесь отказ ожидаем — портал, который событие не знает, отвечает
+ * `ERROR_EVENT_NOT_FOUND`, и ронять из-за этого установку нельзя: элементы просто останутся на
+ * установившем, как и договорено.
+ *
+ * ⚠ Подписываемся сами, хотя портал обещает обработчик автоматически: автоматический идёт на адрес
+ * УСТАНОВКИ, то есть на эту самую страницу, и событие было бы «доставлено» без следа (подробнее —
+ * у `B24_SYSTEM_USER_EVENT`).
+ */
+async function bindSystemUserEvent(): Promise<void> {
+  const { unbind, bind } = buildEventBindCalls(initData.value.eventList ?? [], [B24_SYSTEM_USER_EVENT], eventHandlerUrl.value)
+  try {
+    const $b24 = b24Instance.getOrThrow()
+    if (unbind.length) await $b24.actions.v2.batch.make({ calls: unbind, options: { isHaltOnError: false } })
+    const call = bind[0]
+    if (!call) {
+      systemUserEvent.value = 'уже подписано'
+      return
+    }
+    const res = await $b24.actions.v2.call.make({ method: call.method, params: call.params })
+    systemUserEvent.value = res.isSuccess ? 'ok' : `ошибка: ${res.getErrorMessages().join('; ')}`
+  } catch (error: unknown) {
+    log.warning('подписка на событие о служебном пользователе не удалась', { error: String(error) })
+    systemUserEvent.value = `ошибка: ${error instanceof Error ? error.message : String(error)}`
   }
 }
 
@@ -370,6 +407,10 @@ async function runInstall() {
     caption.value = 'Регистрация обработчика событий…'
     await bindEvents()
 
+    // Служебный пользователь приложения — ДО `installFinish`: событие о нём портал шлёт именно по
+    // завершении установки, и подписка, сделанная позже, его не получит. Best-effort.
+    await bindSystemUserEvent()
+
     // Register the app's automation trigger (best-effort, never blocks — see registerTrigger()).
     caption.value = 'Регистрация триггера автоматизации…'
     await registerTrigger()
@@ -536,6 +577,10 @@ onMounted(runInstall)
                 <template v-if="diagnostics.trigger">
                   <span class="text-(--ui-color-base-3)">Триггер автоматизации:</span>
                   <span class="break-all">{{ diagnostics.trigger }}</span>
+                </template>
+                <template v-if="diagnostics.systemUserEvent">
+                  <span class="text-(--ui-color-base-3)">Событие о служебном пользователе:</span>
+                  <span class="break-all">{{ diagnostics.systemUserEvent }}</span>
                 </template>
                 <template v-if="diagnostics.smartProcess">
                   <span class="text-(--ui-color-base-3)">Смарт-процессы:</span>

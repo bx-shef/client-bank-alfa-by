@@ -9,6 +9,7 @@ import {
   isSafeClientEndpoint,
   parseBracketForm,
   parseInstallEvent,
+  parseSystemUserEvent,
   parseUninstallEvent,
   safeEqual,
   verifyApplicationToken
@@ -167,6 +168,66 @@ describe('parseUninstallEvent', () => {
       auth: { domain: 'd', member_id: 'm', application_token: 't' }
     })
     expect(event.data).toEqual({})
+  })
+})
+
+describe('parseSystemUserEvent (ONAPPUSERREADY)', () => {
+  // Shape from the official doc (common/events/on-app-user-ready) as it arrives on the wire:
+  // form-encoded, so every leaf is a string.
+  const wire = 'event=ONAPPUSERREADY&data[access_token]=SYS_A&data[refresh_token]=SYS_R&data[expires_in]=3600'
+    + '&data[member_id]=a223c6b3710f85df22e9377d6c4f7553&data[user_id]=512&data[status]=S'
+    + '&ts=1756890123&auth[domain]=some-domain.bitrix24.ru&auth[member_id]=a223c6b3710f85df22e9377d6c4f7553'
+    + `&auth[user_id]=1&auth[application_token]=${APP_TOKEN}&auth[access_token]=INST_A`
+  const payload = () => parseBracketForm(wire)
+
+  it('takes the system user id from data and the app token from auth', () => {
+    expect(parseSystemUserEvent(payload())).toEqual({
+      memberId: 'a223c6b3710f85df22e9377d6c4f7553',
+      userId: 512,
+      applicationToken: APP_TOKEN
+    })
+  })
+
+  it('never returns the long-lived authorization of the system user', () => {
+    // We need the id, not one more permanent key to the client's portal.
+    const text = JSON.stringify(parseSystemUserEvent(payload()))
+    expect(text).not.toContain('SYS_A')
+    expect(text).not.toContain('SYS_R')
+  })
+
+  it('takes data.user_id, not auth.user_id (that one is the installer)', () => {
+    expect(parseSystemUserEvent(payload()).userId).toBe(512)
+  })
+
+  it.each([['0'], ['-5'], ['0x11'], ['1e1'], ['9007199254740993'], ['abc'], ['']])(
+    'rejects a user id the portal would not have sent: %j', (raw) => {
+      // It becomes the responsible of CRM elements, and the portal does not validate that field:
+      // '0x11' would be user 17, a digit string past 2^53 somebody else entirely.
+      const p = payload() as { data: Record<string, unknown> }
+      p.data.user_id = raw
+      expect(() => parseSystemUserEvent(p)).toThrow(/user_id/)
+    })
+
+  it('rejects an event whose data and auth name different portals', () => {
+    const p = payload() as { data: Record<string, unknown> }
+    p.data.member_id = 'someone-else'
+    expect(() => parseSystemUserEvent(p)).toThrow(/member_id/)
+  })
+
+  it('accepts an event without data.member_id — auth is what the app token authenticates', () => {
+    const p = payload() as { data: Record<string, unknown> }
+    delete p.data.member_id
+    expect(parseSystemUserEvent(p).memberId).toBe('a223c6b3710f85df22e9377d6c4f7553')
+  })
+
+  it('rejects a missing data block, a missing app token and a different event', () => {
+    const noData = payload() as Record<string, unknown>
+    delete noData.data
+    expect(() => parseSystemUserEvent(noData)).toThrow(/data/)
+    const noToken = payload() as { auth: Record<string, unknown> }
+    delete noToken.auth.application_token
+    expect(() => parseSystemUserEvent(noToken)).toThrow()
+    expect(() => parseSystemUserEvent(installPayload)).toThrow(/ONAPPUSERREADY/)
   })
 })
 

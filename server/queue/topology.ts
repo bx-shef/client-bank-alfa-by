@@ -75,11 +75,18 @@ export interface EventJobCredentials {
 export interface EventJob {
   memberId: string
   domain: string
-  kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL'
+  kind: 'ONAPPINSTALL' | 'ONAPPUNINSTALL' | 'ONAPPUSERREADY'
   /** Event timestamp from B24 (deduplicates redelivery of the same event). */
   ts: string
   /** Present on ONAPPINSTALL — the portal credentials the consumer persists. */
   credentials?: EventJobCredentials
+  /**
+   * Present on ONAPPUSERREADY — the app's system user to record (see server/utils/systemUser.ts).
+   * `appTokenHash` is set only when the route could not verify the event yet (the install was not
+   * persisted when it arrived); the consumer then verifies it against the stored token. A HASH, not
+   * the token: the application token authenticates uninstalls and has no business in Redis.
+   */
+  systemUser?: { userId: number, appTokenHash?: string }
 }
 
 /** Pull one statement window for a portal/account (the cron fans these out). */

@@ -57,6 +57,15 @@ describe('buildDistributionRowAddCall', () => {
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.status.postfix)]).toBe('active')
     expect(f[buildUfFieldNameCamel(DSP.id, DISTRIBUTION_SP_FIELDS.marker.postfix)]).toBe('pay-key|invoice|39')
   })
+  // Owner's decision 2026-09-29: elements go on the app's system user, else on the installer —
+  // resolved by the caller, the builder only carries it. A value the portal would not send must
+  // not land the row on somebody else: the portal does not validate the field.
+  it('carries the responsible when given, and nothing when absent or not a portal user id', () => {
+    const fieldsOf = (assignedById?: unknown) => buildDistributionRowAddCall({ ...INPUT, assignedById: assignedById as number }).params.fields as Record<string, unknown>
+    expect(fieldsOf(512).assignedById).toBe(512)
+    expect('assignedById' in fieldsOf(undefined)).toBe(false)
+    for (const bad of [0, -1, 1.5, Number.NaN, 2 ** 53 + 2]) expect('assignedById' in fieldsOf(bad)).toBe(false)
+  })
 })
 
 describe('buildMarkerListCall', () => {
@@ -200,6 +209,12 @@ describe('buildPaymentElementAddCall', () => {
   it('omits companyId when absent / invalid', () => {
     expect((buildPaymentElementAddCall(PSP, { opportunity: 1, currency: 'BYN', marker: 'm' }).params.fields as Record<string, unknown>).companyId).toBeUndefined()
     expect((buildPaymentElementAddCall(PSP, { opportunity: 1, currency: 'BYN', marker: 'm', companyId: '0' }).params.fields as Record<string, unknown>).companyId).toBeUndefined()
+  })
+  it('carries the responsible (system user / installer) when given, and nothing otherwise', () => {
+    const fieldsOf = (assignedById?: unknown) => buildPaymentElementAddCall(PSP, { opportunity: 1, currency: 'BYN', marker: 'm', assignedById: assignedById as number }).params.fields as Record<string, unknown>
+    expect(fieldsOf(512).assignedById).toBe(512)
+    expect('assignedById' in fieldsOf(undefined)).toBe(false)
+    for (const bad of [0, -3, 2.5, Number.POSITIVE_INFINITY]) expect('assignedById' in fieldsOf(bad)).toBe(false)
   })
 })
 
