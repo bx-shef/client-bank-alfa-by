@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exchangeAndSaveKey, precheckKeyConnect, type ConnectKeyDeps } from '../server/utils/bankConnectKey'
+import { BANK_UNREACHABLE, exchangeAndSaveKey, precheckKeyConnect, type ConnectKeyDeps } from '../server/utils/bankConnectKey'
 import type { BankToken } from '../server/utils/bankTokenStore'
 
 // Обмен ключа API Альфы на пару токенов (#488). Проверяется три вещи: форма запроса к банку, то,
@@ -124,6 +124,33 @@ describe('секреты не вытекают', () => {
     // И по-прежнему без секретов (их в этом ответе нет, но проверка держит инвариант на месте).
     expect(line).not.toContain(KEY)
     expect(line).not.toContain(SECRET)
+  })
+
+  // ⚠ ЖИВАЯ НАХОДКА 2026-10-01: у банка пропала DNS-запись, ответа не было вовсе, а экран говорил
+  // «банк не принял ключ» — владелец счёта пошёл бы перевыпускать исправный ключ.
+  it('банк не ответил — сказано про сервер, а не про ключ, и причина в логе', async () => {
+    const { d, logs } = deps({
+      exchange: async () => {
+        throw Object.assign(new Error('[POST] "https://bank.test:8273/token": <no response> fetch failed'), {
+          cause: Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })
+        })
+      }
+    })
+    const r = await connect(d)
+    expect(r.status).toBe(502)
+    expect(String(r.body.error)).toBe(BANK_UNREACHABLE)
+    expect(String(r.body.error)).not.toMatch(/не принял/)
+    expect(logs.join('\n')).toContain('ENOTFOUND')
+  })
+
+  it('банк ответил отказом — это НЕ сетевой сбой, что бы ни было в тексте', async () => {
+    const { d } = deps({
+      exchange: async () => {
+        throw Object.assign(new Error('fetch failed <no response>'), { status: 400, cause: { code: 'ENOTFOUND' } })
+      }
+    })
+    const r = await connect(d)
+    expect(String(r.body.error)).toMatch(/не принял ключ/)
   })
 
   it('лог однострочный: перевод строки из ответа банка не подделает соседнюю запись', async () => {

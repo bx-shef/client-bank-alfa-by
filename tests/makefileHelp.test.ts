@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
 // Гард операторского входа (замечание владельца, 2026-08-20).
@@ -146,6 +147,16 @@ describe('операторские цели Makefile видны в `make help`',
     const used = PARAMS.filter(v => MAKEFILE.includes('$${' + v + ':-}'))
     expect(used, 'параметры не найдены в безопасной форме — имена разъехались с гардом')
       .toEqual(PARAMS)
+  })
+
+  // ⚠ Замер 2026-10-01: оператор набрал голый `make` на сервере и получил `pnpm: No such file or
+  // directory` — первой целью стоит `dev`. Проверяется ВЫЗОВОМ make (`-n`: ничего не исполняет),
+  // а не поиском строки: `.DEFAULT_GOAL`, объявленный ПОСЛЕ первой цели, текстом нашёлся бы, а
+  // работал бы — тоже, но перестановка блоков молча вернула бы `dev`.
+  it('голый `make` показывает справку, а не запускает `pnpm dev`', () => {
+    const out = execFileSync('make', ['-n', '-C', ROOT], { encoding: 'utf8' })
+    expect(out).not.toContain('pnpm dev')
+    expect(out).toContain('awk')
   })
 
   it('`self-update` существует — без него остальные цели на сервер не доедут', () => {

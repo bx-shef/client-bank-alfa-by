@@ -1,6 +1,6 @@
 # План рефакторинга — импорт выписки из клиент-банка (Альфа-Банк Беларусь → мультибанк)
 
-> Last reviewed: 2026-09-27
+> Last reviewed: 2026-10-02
 
 Перенос и переписывание legacy-приложения (серверный PHP-апп Bitrix24) на новый стек.
 Документ — живой план; обновляется по мере прохождения этапов.
@@ -204,7 +204,7 @@
   `pageNo/pageRowCount` (0=все), `amountFrom/To`, `transactionType`, `cacheKey`. Ответ — `page[]`
   (модель операции: `operType` D/C, `corr*`, `amount/currIso`, `purpose`, `docId/docNum`,
   `acceptDate/operDate`) + `statistics[]` + `errors[]`.
-- Хосты: sandbox `developerhub.alfabank.by:8273`, prod `ibapi2.alfabank.by:8273`. Лимит 100/мин (пилот).
+- Хосты: `developerhub.alfabank.by:8273` — и песочница, и боевые ключи (прежний prod `ibapi2.alfabank.by:8273` пропал из DNS 2026-09-29, см. `ALFA_API.md`). Лимит 100/мин (пилот).
 
 ## Живые прогоны банков (требования)
 

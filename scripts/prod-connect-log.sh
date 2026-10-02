@@ -37,11 +37,14 @@ if [ -f .env ]; then
   echo "  api_base  : ${api:-не задан (берётся из token_url)}"
   echo "  client_id : ${cid:-НЕ ЗАДАН}"
   case "${url:-}" in
-    *developerhub.alfabank.by*)
-      echo "  ⚠ ЭТО ПЕСОЧНИЦА. Ключ из боевого кабинета здесь не примут никогда."
-      echo "    В песочнице вместо ключа API подставляется буквальное значение «API»."
+    # ⚠ As of 2026-10-01 the bank's own documented host IS the working one: production API keys
+    # exchange there (measured on a client server). `ibapi2` — the old value from correspondence —
+    # lost its DNS record on 2026-09-29 and now fails with ENOTFOUND before reaching the bank.
+    *developerhub.alfabank.by*) echo "  ✓ хост из документации банка (боевые ключи принимает, проверено 2026-10-01)" ;;
+    *ibapi2.alfabank.by*)
+      echo "  ⚠ ibapi2 с 2026-09-29 не резолвится в DNS — запрос до банка не дойдёт."
+      echo "    Замените в .env оба адреса на developerhub.alfabank.by:8273 (docs/ALFA_API.md)."
       ;;
-    *ibapi2.alfabank.by*) echo "  ✓ боевой хост" ;;
     '') echo "  ⚠ без token_url подключение по ключу не заработает вовсе" ;;
     *) echo "  ⚠ хост незнакомый — сверьте с docs/ALFA_API.md" ;;
   esac
@@ -66,7 +69,9 @@ lines=$(printf '%s\n' "$log" | grep -F '[bank-connect]')
 if [ -z "${lines:-}" ]; then
   echo "за $SINCE попыток подключения не было."
   echo "⚠ Если вы только что нажимали «Подключить», а строк нет — запрос не дошёл до backend."
-  echo "  Смотрите nginx: `make doctor` покажет контейнеры и HTTPS."
+  # ⚠ Single quotes: inside double quotes the backticks EXECUTED `make doctor` and pasted its whole
+  # output mid-sentence (seen live 2026-10-01).
+  echo '  Смотрите nginx: `make doctor` покажет контейнеры и HTTPS.'
   exit 0
 fi
 
@@ -78,6 +83,7 @@ echo "invalid_grant    — банк не принял САМ КЛЮЧ (отоз�
 echo "invalid_scope    — банк не даёт запрошенный scope этому приложению"
 echo "401/403          — приложение не авторизовано на этом хосте"
 echo "ENOTFOUND/ECONN  — до банка не достучались (адрес, сеть, шлюз)"
+echo "fetch failed / <no response> — то же: банк не ответил вовсе; причина — в (cause: …) в конце строки"
 echo "CERT/SELF_SIGNED — не доверяем сертификату банка (NODE_EXTRA_CA_CERTS, см. docs/ALFA_API.md)"
 echo
 echo "⚠ Ключ и client_secret из этих строк вырезаны на стороне приложения."

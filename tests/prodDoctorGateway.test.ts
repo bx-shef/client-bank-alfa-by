@@ -47,6 +47,10 @@ if [ "$1" = compose ]; then
           esac ;;
       esac
       case "$args" in
+        *bank-net-probe*)
+          # Проба связи с банками (2026-10-01) по-настоящему ходила бы в сеть — подменяем ответом.
+          [ "\${FAKE_EXEC_RC:-0}" = 0 ] || exit "$FAKE_EXEC_RC"
+          printf '%b' "\${FAKE_BANK_NET-}"; exit 0 ;;
         *PRIOR_OAUTH_API_BASE*)
           # Шум, который настоящий docker печатает в stderr, — оператору его видеть незачем.
           echo 'OCI-NOISE: connection refused' >&2
@@ -262,5 +266,32 @@ describe('разбор адреса у доктора совпадает с пр
   it('пустое значение — «не задан», и приложение тоже его не принимает', () => {
     expect(route('')).toBe('none')
     expect(normalizeBankApiBase('')).toBeNull()
+  })
+})
+
+// ⚠ Живой случай 2026-10-01: у Альфы пропала DNS-запись `ibapi2.alfabank.by`, а заметил это
+// только владелец счёта — по экрану «банк не принял ключ». Вердикт пробы обязан различать причины:
+// чинятся они в разных местах (адрес/DNS против корней доверия).
+describe('связь с банками изнутри backend', () => {
+  it('хост не резолвится — ПЛОХО с подсказкой про DNS', () => {
+    const { out } = doctor({ FAKE_BANK_NET: 'bad ibapi2.alfabank.by:8273 ENOTFOUND\\n' })
+    expect(out).toMatch(/ПЛОХО.*ibapi2\.alfabank\.by:8273 — не резолвится в DNS/)
+  })
+
+  it('чужой сертификат — ПЛОХО с подсказкой про корни, а не про DNS', () => {
+    const { out } = doctor({ FAKE_BANK_NET: 'bad developerhub.alfabank.by:8273 SELF_SIGNED_CERT_IN_CHAIN\\n' })
+    expect(out).toMatch(/ПЛОХО.*не доверяем сертификату.*HOST_CA_BUNDLE/)
+    expect(out).not.toContain('не резолвится')
+  })
+
+  it('любой HTTP-ответ — OK', () => {
+    const { out } = doctor({ FAKE_BANK_NET: 'ok developerhub.alfabank.by:8273 HTTP 404\\n' })
+    expect(out).toMatch(/OK.*developerhub\.alfabank\.by:8273 — отвечает \(HTTP 404\)/)
+  })
+
+  it('backend не ответил — «не проверить», а не «адреса не заданы»', () => {
+    const { out } = doctor({ FAKE_EXEC_RC: '1' })
+    expect(out).toContain('не проверить — backend не ответил на exec')
+    expect(out).not.toContain('банковские адреса (https) не заданы')
   })
 })

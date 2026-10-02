@@ -44,6 +44,33 @@ export const ALFA_CLIENT_SECRET_MISSING
 export const ALFA_CONNECT_NOT_CONFIGURED
   = 'на сервере приложения не настроено подключение к Альфа-Банку (переменные ALFA_OAUTH_CLIENT_ID и ALFA_OAUTH_TOKEN_URL) — это настройка сервера приложения, а не портала'
 
+/** До банка не достучались — ключ тут ни при чём, чинится на сервере приложения. */
+export const BANK_UNREACHABLE
+  = 'сервер приложения не смог связаться с банком (ключ API тут ни при чём — вводить его заново или перевыпускать не нужно). Это настройка сервера приложения: адрес банка, DNS или сертификаты — сообщите администратору сервера'
+
+/**
+ * Код сетевого отказа, если банк НЕ ОТВЕТИЛ вовсе (`null` — ответ был, то есть отказал сам банк).
+ *
+ * ofetch на сетевом сбое бросает `FetchError` без `response` и с `<no response>` в тексте, а
+ * настоящая причина (`ENOTFOUND`, `ECONNREFUSED`, ошибка сертификата) лежит в `cause` — в
+ * сообщении её нет, и в логе 2026-10-01 стояло голое «fetch failed». Наличие `response`/`status`
+ * значит «банк ответил», и тогда это не сетевой отказ, что бы ни было в тексте.
+ */
+export function networkFailureCode(e: unknown): string | null {
+  const err = e as { response?: unknown, status?: unknown, statusCode?: unknown, message?: unknown, cause?: unknown } | null
+  if (!err || typeof err !== 'object') return null
+  if (err.response !== undefined || err.status !== undefined || err.statusCode !== undefined) return null
+  const message = typeof err.message === 'string' ? err.message : ''
+  // `fetch failed` в node оборачивает настоящую причину ещё одним уровнем `cause`.
+  let c: unknown = err.cause
+  for (let i = 0; i < 3 && c && typeof c === 'object'; i++) {
+    const code = (c as { code?: unknown }).code
+    if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,40}$/.test(code)) return code
+    c = (c as { cause?: unknown }).cause
+  }
+  return message.includes('<no response>') ? 'no-response' : null
+}
+
 /** Ответ роута: 200 + что подключили, либо 4xx/5xx + причина. */
 export interface ConnectKeyResult {
   status: number
@@ -146,7 +173,13 @@ export async function exchangeAndSaveKey(
     // ФОРМУ (`client_secret=…`, JWT), а банк волен процитировать голое ЗНАЧЕНИЕ ключа — оно едет
     // в `username=`, которого в шаблонах нет. `redactValues` вырезает ровно те две строки, что мы
     // только что отправили, поэтому промах шаблона ничего не открывает.
-    deps.log?.(`alfa password grant failed: ${redactValues(describeUpstreamError(e), [key, clientSecret])}`)
+    const cause = networkFailureCode(e)
+    deps.log?.(`alfa password grant failed: ${redactValues(describeUpstreamError(e), [key, clientSecret])}${cause ? ` (cause: ${cause})` : ''}`)
+    // ⚠ «До банка не достучались» и «банк отказал» — РАЗНЫЕ отказы (живая находка 2026-10-01):
+    // у банка пропала DNS-запись `ibapi2.alfabank.by`, ответа не было вовсе, а экран говорил «банк
+    // не принял ключ» — и владелец счёта пошёл бы перевыпускать исправный ключ. Сетевой отказ
+    // чинится на сервере приложения (адрес, DNS, корни доверия), а не в кабинете банка.
+    if (cause) return { status: 502, body: { error: BANK_UNREACHABLE } }
     return {
       status: 502,
       body: { error: 'банк не принял ключ API. Проверьте, что ключ скопирован целиком, действителен и выпущен под наш Client ID' }

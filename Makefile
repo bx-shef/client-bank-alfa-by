@@ -20,6 +20,11 @@
 # `deploy/bitrixvm/git-poll-deploy.sh`: все команды из каталога стека, файлы — из `.env`.
 DC = docker compose$(if $(shell grep -qs '^[[:space:]]*COMPOSE_FILE[[:space:]]*=' ./.env && echo y),, -f docker-compose.prod.yml)
 
+# ⚠ Голый `make` на сервере обязан показать справку, а не запустить первую цель: первой стоит `dev`
+# (`pnpm dev`), а pnpm на сервере нет — оператор получал «pnpm: No such file or directory» вместо
+# списка команд (замер 2026-10-01).
+.DEFAULT_GOAL := help
+
 # ─── Локальная разработка ────────────────────────────────────────────
 
 dev:

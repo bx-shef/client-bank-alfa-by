@@ -242,6 +242,50 @@ else
   fi
 fi
 
+say "Связь с банками изнутри backend"
+# WHY (2026-10-01): Alfa dropped the DNS record of `ibapi2.alfabank.by`, and the only symptom was
+# «банк не принял ключ API» on the owner's screen — nothing here noticed. Each configured bank
+# address is resolved and hit ONCE from inside backend (its DNS, its CA roots — the ones that
+# matter). Any HTTP status means «network and TLS fine»; the error CODE says what broke.
+# ⚠ Only scheme+host are printed; no credentials are sent (plain GET to the origin). An `http://`
+# address is the internal gateway — checked by the gateway section above, skipped here.
+bank_net=$($DC exec -T -e NODE_OPTIONS= backend node -e '
+// bank-net-probe
+const names = ["ALFA_OAUTH_TOKEN_URL", "ALFA_OAUTH_API_BASE", "PRIOR_OAUTH_TOKEN_URL", "PRIOR_OAUTH_API_BASE"]
+const seen = new Set()
+;(async () => {
+  for (const n of names) {
+    let u
+    try { u = new URL(String(process.env[n] || "").trim()) } catch { continue }
+    if (u.protocol !== "https:" || seen.has(u.host)) continue
+    seen.add(u.host)
+    try {
+      const r = await fetch(u.origin + "/", { signal: AbortSignal.timeout(8000) })
+      console.log("ok " + u.host + " HTTP " + r.status)
+    } catch (e) {
+      const c = (e && e.cause && (e.cause.code || e.cause.name)) || (e && e.name) || "error"
+      console.log("bad " + u.host + " " + c)
+    }
+  }
+})()' 2>/dev/null) || bank_net="unknown"
+if [ "$bank_net" = "unknown" ]; then
+  warn "не проверить — backend не ответил на exec"
+elif [ -z "$bank_net" ]; then
+  ok "банковские адреса (https) не заданы — проверять нечего"
+else
+  while read -r verdict host rest; do
+    [ -n "${verdict:-}" ] || continue
+    case "$verdict" in
+      ok) ok "$host — отвечает ($rest)" ;;
+      *) case "$rest" in
+           ENOTFOUND|EAI_AGAIN) bad "$host — не резолвится в DNS ($rest): адрес сменил банк или DNS сервера; nslookup $host 8.8.8.8 (docs/OPERATIONS.md «Частые сбои»)" ;;
+           *CERT*|*SELF_SIGNED*|*ISSUER*) bad "$host — не доверяем сертификату ($rest): корни хоста, HOST_CA_BUNDLE" ;;
+           *) bad "$host — не достучались ($rest)" ;;
+         esac ;;
+    esac
+  done <<< "$bank_net"
+fi
+
 say "Жалобы в логах (последний час)"
 # ⚠ Пустой grep сам по себе НЕ означает «всё хорошо»: если контейнеров нет или логи не читаются,
 # он тоже пуст. Разводим эти два смысла — иначе тотальная авария выглядела бы зелёной строкой.

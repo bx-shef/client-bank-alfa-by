@@ -18,8 +18,9 @@
 
 /** Non-secret OAuth config (clientSecret is added only server-side at call time). */
 export interface AlfaOAuthConfig {
-  /** OAuth base, e.g. `https://developerhub.alfabank.by:8273` (sandbox) or
-   * `https://ibapi2.alfabank.by:8273` (prod). No trailing slash. */
+  /** OAuth base, e.g. `https://developerhub.alfabank.by:8273` — the bank's documented host, which
+   * also serves production API keys (the old `ibapi2` host lost its DNS record on 2026-09-29).
+   * No trailing slash. */
   baseUrl: string
   clientId: string
   /** Space-separated scopes; default `accounts`. */
